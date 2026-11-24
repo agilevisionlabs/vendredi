@@ -103,35 +103,18 @@ impl PartnerForm {
         }
         Ok(doc.to_string())
     }
-    fn fields(&mut self, ui: &mut Ui) {
+    fn fields(&mut self, ui: &mut Ui, workspace: &Workspace) {
         let p = &mut self.partner;
         field(ui, "Partner name", &mut p.name);
-        for (i, component) in p.identity.iter_mut().enumerate() {
-            let label = match i {
-                0 => "EDIFACT identifier".into(),
-                1 => "Identifier qualifier".into(),
-                _ => format!("Identity component {}", i + 1),
-            };
-            field(ui, &label, component);
+        if self
+            .index
+            .is_some_and(|i| workspace.partners[i].name != p.name)
+        {
+            ui.label(muted(
+                "Existing traffic and script state are stored under the previous name.",
+            ));
         }
-        ui.horizontal(|ui| {
-            if ui.small_button("Add identity component").clicked() {
-                p.identity.push(String::new());
-            }
-            if p.identity.len() > 1 && ui.small_button("Remove last component").clicked() {
-                p.identity.pop();
-            }
-        });
-        ui.horizontal(|ui| {
-            ui.label("Character set");
-            ComboBox::from_id_salt("charset")
-                .selected_text(&p.charset)
-                .show_ui(ui, |ui| {
-                    for s in ["UNOA", "UNOB", "UNOC"] {
-                        ui.selectable_value(&mut p.charset, s.into(), s);
-                    }
-                });
-        });
+        field(ui, "EDIFACT identifier", &mut p.identity[0]);
         ui.horizontal_wrapped(|ui| {
             ui.label("Acknowledge");
             for (v, s) in [
@@ -142,16 +125,43 @@ impl PartnerForm {
                 ui.selectable_value(&mut p.acknowledge, v, s);
             }
         });
-        let mut custom = p.separators.is_some();
-        if ui
-            .checkbox(&mut custom, "Custom EDIFACT separators")
-            .changed()
-        {
-            p.separators = custom.then(|| ":+.? '".into());
-        }
-        if let Some(s) = &mut p.separators {
-            field(ui, "Six service characters", s);
-        }
+        ui.collapsing("EDIFACT options", |ui| {
+            for (i, component) in p.identity.iter_mut().enumerate().skip(1) {
+                let label = match i {
+                    1 => "Identifier qualifier".into(),
+                    _ => format!("Identity component {}", i + 1),
+                };
+                field(ui, &label, component);
+            }
+            ui.horizontal(|ui| {
+                if ui.small_button("Add identity component").clicked() {
+                    p.identity.push(String::new());
+                }
+                if p.identity.len() > 1 && ui.small_button("Remove last component").clicked() {
+                    p.identity.pop();
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label("Character set");
+                ComboBox::from_id_salt("charset")
+                    .selected_text(&p.charset)
+                    .show_ui(ui, |ui| {
+                        for s in ["UNOA", "UNOB", "UNOC"] {
+                            ui.selectable_value(&mut p.charset, s.into(), s);
+                        }
+                    });
+            });
+            let mut custom = p.separators.is_some();
+            if ui
+                .checkbox(&mut custom, "Custom EDIFACT separators")
+                .changed()
+            {
+                p.separators = custom.then(|| ":+.? '".into());
+            }
+            if let Some(s) = &mut p.separators {
+                field(ui, "Six service characters", s);
+            }
+        });
         ui.separator();
         ui.heading("Intake channels");
         let mut remove = None;
@@ -160,7 +170,7 @@ impl PartnerForm {
                 match channel {
                     Receive::Http { path } => field(ui, "HTTP path", path),
                     Receive::Folder { directory, suffix } => {
-                        path_field(ui, "Intake folder", directory);
+                        path_field(ui, "Intake folder", directory, &workspace.root);
                         field(ui, "Filename suffix", suffix);
                     }
                 }
@@ -200,7 +210,9 @@ impl PartnerForm {
             }
         });
         match &mut p.send {
-            SendChannel::Folder { directory } => path_field(ui, "Reply folder", directory),
+            SendChannel::Folder { directory } => {
+                path_field(ui, "Reply folder", directory, &workspace.root)
+            }
             SendChannel::Http { url, .. } => {
                 field(ui, "Reply URL", url);
                 let mut remove = None;
@@ -229,10 +241,13 @@ pub(super) fn field(ui: &mut Ui, label: &str, text: &mut String) {
     ui.add(egui::TextEdit::singleline(text).desired_width(f32::INFINITY))
         .labelled_by(caption.id);
 }
-fn path_field(ui: &mut Ui, label: &str, path: &mut PathBuf) {
+fn path_field(ui: &mut Ui, label: &str, path: &mut PathBuf, root: &Path) {
     let mut text = path.display().to_string();
     field(ui, label, &mut text);
     *path = text.into();
+    if path.is_relative() && !path.as_os_str().is_empty() {
+        ui.label(muted(root.join(&*path).display().to_string()));
+    }
 }
 
 impl Desktop {
@@ -258,7 +273,7 @@ impl Desktop {
             });
             ScrollArea::vertical()
                 .max_height((ctx.content_rect().height() - 220.).max(100.))
-                .show(ui, |ui| form.fields(ui));
+                .show(ui, |ui| form.fields(ui, &self.workspace));
             ui.separator();
             if !form.error.is_empty() {
                 ui.colored_label(AMBER, &form.error);

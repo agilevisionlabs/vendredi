@@ -63,8 +63,9 @@ impl Desktop {
             edit.verify()?;
         }
         let mut written = Vec::new();
-        let mut stopped = false;
         let apply = (|| -> Result<()> {
+            // A running rule reads its JavaScript file on each invocation.
+            self.running.stop()?;
             for edit in edits {
                 if edit.before != Some(edit.after) {
                     edit.write()?;
@@ -72,8 +73,6 @@ impl Desktop {
                 }
             }
             let workspace = Workspace::load(&self.root)?;
-            stopped = true;
-            self.running.stop()?;
             self.running = runtime::start(
                 workspace.clone(),
                 self.output.clone(),
@@ -94,14 +93,13 @@ impl Desktop {
                     format!("restoring {} after {error:#}", edit.path.display())
                 })?;
             }
-            if stopped {
-                self.running = runtime::start(
-                    self.workspace.clone(),
-                    self.output.clone(),
-                    false,
-                    self.listening,
-                )?;
-            }
+            self.running = runtime::start(
+                self.workspace.clone(),
+                self.output.clone(),
+                false,
+                self.listening,
+            )
+            .with_context(|| format!("restarting the previous workspace after {error:#}"))?;
             return Err(error);
         }
         Ok(())
