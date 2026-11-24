@@ -36,9 +36,48 @@ pub fn run(root: PathBuf) -> Result<()> {
     eframe::run_native(
         "Vendredi",
         opts,
-        Box::new(move |cc| Ok(Box::new(Desktop::open(root, &cc.egui_ctx)?))),
+        Box::new(move |cc| Ok(Box::new(Session::open(root, &cc.egui_ctx)))),
     )
     .map_err(|e| anyhow!("{e}"))
+}
+
+struct Session {
+    root: PathBuf,
+    desktop: Result<Desktop>,
+}
+impl Session {
+    fn open(root: PathBuf, ctx: &egui::Context) -> Self {
+        let desktop = Desktop::open(root.clone(), ctx);
+        Self { root, desktop }
+    }
+    fn show(&mut self, ctx: &egui::Context) {
+        match &mut self.desktop {
+            Ok(app) => app.show(ctx),
+            Err(e) => {
+                let mut retry = false;
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::new().fill(BG).inner_margin(24))
+                    .show(ctx, |ui| {
+                        ui.heading("Couldn’t open workspace");
+                        ui.label(self.root.display().to_string());
+                        egui::ScrollArea::vertical()
+                            .max_height(ui.available_height() - 52.)
+                            .show(ui, |ui| {
+                                ui.label(format!("{e:#}"));
+                            });
+                        retry = button(ui, "Retry", true).clicked();
+                    });
+                if retry {
+                    self.desktop = Desktop::open(self.root.clone(), ctx);
+                }
+            }
+        }
+    }
+}
+impl eframe::App for Session {
+    fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        self.show(ctx);
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -402,12 +441,6 @@ fn replace(path: &Path, text: &str) -> Result<()> {
     f.persist(path)?;
     Ok(())
 }
-impl eframe::App for Desktop {
-    fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-        self.show(ctx);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -417,6 +450,13 @@ mod tests {
         time::{Duration, Instant},
     };
     fn frame(app: &mut Desktop, ctx: &egui::Context, events: Vec<Event>) -> egui::FullOutput {
+        render(ctx, events, |ctx| app.show(ctx))
+    }
+    fn render(
+        ctx: &egui::Context,
+        events: Vec<Event>,
+        draw: impl FnMut(&egui::Context),
+    ) -> egui::FullOutput {
         let size = ctx
             .data(|d| d.get_temp::<Vec2>(egui::Id::new("test screen size")))
             .unwrap_or(Vec2::new(1080., 680.));
@@ -426,11 +466,18 @@ mod tests {
                 events,
                 ..Default::default()
             },
-            |ctx| app.show(ctx),
+            draw,
         )
     }
     pub(super) fn click(app: &mut Desktop, ctx: &egui::Context, label: &str) -> Result<()> {
-        let output = frame(app, ctx, vec![]);
+        click_in(ctx, label, |ctx| app.show(ctx))
+    }
+    fn click_in(
+        ctx: &egui::Context,
+        label: &str,
+        mut draw: impl FnMut(&egui::Context),
+    ) -> Result<()> {
+        let output = render(ctx, vec![], &mut draw);
         let pos = output
             .shapes
             .iter()
@@ -443,8 +490,7 @@ mod tests {
             })
             .with_context(|| format!("missing widget {label}"))?;
         for pressed in [true, false] {
-            frame(
-                app,
+            render(
                 ctx,
                 vec![
                     Event::PointerMoved(pos),
@@ -455,10 +501,30 @@ mod tests {
                         modifiers: Modifiers::NONE,
                     },
                 ],
+                &mut draw,
             );
         }
         Ok(())
     }
+    #[test]
+    #[ignore = "uses a local workspace listener"]
+    fn retry_opening_repaired_workspace() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        crate::sample(dir.path())?;
+        let path = dir.path().join("vendredi.toml");
+        let valid = fs::read_to_string(&path)?.replace(":8180", ":0");
+        fs::write(&path, "[broken")?;
+        let ctx = egui::Context::default();
+        let mut session = Session::open(dir.path().into(), &ctx);
+        assert!(session.desktop.is_err());
+        click_in(&ctx, "Retry", |ctx| session.show(ctx))?;
+        assert!(session.desktop.is_err());
+        fs::write(path, valid)?;
+        click_in(&ctx, "Retry", |ctx| session.show(ctx))?;
+        assert!(session.desktop?.listening);
+        Ok(())
+    }
+
     #[test]
     #[ignore = "uses a local listener and folder watcher"]
     fn clear_removed_partner_traffic() -> Result<()> {
