@@ -1,0 +1,43 @@
+name: Verify native releases
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            artifact: macos-arm64
+            binary: vendredi
+          - os: macos-15-intel
+            artifact: macos-x64
+            binary: vendredi
+          - os: windows-2025
+            artifact: windows-x64
+            binary: vendredi.exe
+          - os: ubuntu-24.04
+            artifact: linux-x64
+            binary: vendredi
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup update stable
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev libx11-dev
+      - run: cargo +stable test --workspace --locked
+      - run: cargo +stable test --locked -p vendredi exchange_edit_and_reopen -- --ignored
+      - run: cargo +stable build --release --locked
+      - run: python tests/local_instance.py --binary target/release/${{ matrix.binary }}
+      - if: runner.os == 'macOS'
+        run: python3 tests/release_macos.py target/release/vendredi
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./tests/release_windows.ps1 target/release/vendredi.exe
+      - run: python scripts/package_release.py target/release/${{ matrix.binary }} ${{ matrix.artifact }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vendredi-${{ matrix.artifact }}
+          path: target/dist/vendredi-${{ matrix.artifact }}.*
+          if-no-files-found: error
