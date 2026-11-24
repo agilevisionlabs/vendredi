@@ -485,7 +485,10 @@ mod tests {
             matches!(w.partners[0].rules[0].actions.as_slice(),[Action::Document{..},Action::Script{function,..}] if function=="onMessage")
         );
 
-        fs::write(dir.path().join("inbox/order.edi"), crate::ORDER)?;
+        fs::rename(
+            dir.path().join("order.edi"),
+            dir.path().join("inbox/order.edi"),
+        )?;
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             app.drain();
