@@ -119,6 +119,9 @@ impl Desktop {
                     ) {
                         self.navigate(View::Attention);
                     }
+                    if nav(ui, "Clear history…", "", false, false) {
+                        self.open_cleanup();
+                    }
                     ui.add_space(18.);
                     section(ui, "  PARTNERS");
                     ui.add_space(6.);
@@ -180,7 +183,7 @@ impl Desktop {
                             }
                             let can_remove = self.workspace.partners.len() > 1;
                             if ui
-                                .add_enabled(can_remove, partners::removal_button("Remove partner"))
+                                .add_enabled(can_remove, form::removal_button("Remove partner"))
                                 .on_disabled_hover_text("The workspace needs at least one partner.")
                                 .clicked()
                             {
@@ -447,6 +450,7 @@ impl Desktop {
                 });
             self.send_dialog &= open;
         }
+        self.cleanup_dialog(ctx);
         self.partner_dialog(ctx);
         self.partner_removal_dialog(ctx);
         self.script_dialog(ctx);

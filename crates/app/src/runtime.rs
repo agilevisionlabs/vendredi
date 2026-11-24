@@ -11,7 +11,7 @@ use std::{
 use vendredi_core::{
     config::Workspace,
     edi,
-    engine::{Delivery, Engine, Receipt, SystemClock},
+    engine::{Delivery, Engine, HistoryPeriod, Receipt, SystemClock},
 };
 use vendredi_transports::{self as transport, Inbound};
 
@@ -22,6 +22,7 @@ pub enum Command {
     Resend(i64),
     Inspect(i64),
     Traffic(String),
+    ClearHistory(HistoryPeriod, Option<String>),
     Listen(bool),
     Replay(i64),
     Stop,
@@ -130,6 +131,9 @@ pub fn start(w: Workspace, out: Output, with_history: bool, listen: bool) -> Res
                 Some(Command::Traffic(search)) => e
                     .traffic(&search)
                     .map(|rows| out(json!({"event":"traffic","search":search,"rows":rows}))),
+                Some(Command::ClearHistory(period, partner)) => e
+                    .clear_history(period, partner.as_deref())
+                    .map(|count| out(json!({"event":"history_cleared", "count":count}))),
                 Some(Command::Listen(enable)) => {
                     let result = if enable && listeners.is_none() {
                         transport::listen(&e.workspace, ingest.clone()).map(|l| listeners = Some(l))

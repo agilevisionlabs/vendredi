@@ -322,11 +322,6 @@ fn resolved_path(ui: &mut Ui, path: &Path, root: &Path) {
     }
 }
 
-pub(super) fn removal_button(label: &str) -> egui::Button<'_> {
-    egui::Button::new(RichText::new(label).color(egui::Color32::WHITE))
-        .fill(egui::Color32::from_rgb(173, 40, 42))
-}
-
 pub(super) struct PartnerRemoval {
     index: usize,
     error: String,
@@ -364,7 +359,7 @@ impl Desktop {
                 ui.colored_label(AMBER, &removal.error);
             }
             form::footer(ui, |ui| {
-                if ui.add(removal_button("Confirm removal")).clicked() {
+                if ui.add(form::removal_button("Confirm removal")).clicked() {
                     match self.remove_partner(removal.index) {
                         Ok(()) => close = true,
                         Err(e) => removal.error = format!("{e:#}"),

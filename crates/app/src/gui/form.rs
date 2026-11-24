@@ -75,3 +75,7 @@ pub(super) fn footer(ui: &mut Ui, contents: impl FnOnce(&mut Ui)) {
         contents(ui);
     });
 }
+
+pub(super) fn removal_button(label: &str) -> Button<'_> {
+    Button::new(RichText::new(label).color(Color32::WHITE)).fill(Color32::from_rgb(173, 40, 42))
+}

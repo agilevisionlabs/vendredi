@@ -1,4 +1,5 @@
 mod form;
+mod history;
 mod inspector;
 mod partners;
 mod scripts;
@@ -76,6 +77,7 @@ struct Desktop {
     send_dialog: bool,
     partner_form: Option<partners::PartnerForm>,
     partner_removal: Option<partners::PartnerRemoval>,
+    cleanup: Option<history::Cleanup>,
     script_form: Option<scripts::ScriptForm>,
     partner: usize,
     send_file: String,
@@ -128,6 +130,7 @@ impl Desktop {
             send_dialog: false,
             partner_form: None,
             partner_removal: None,
+            cleanup: None,
             script_form: None,
             partner: 0,
             send_file,
@@ -177,6 +180,18 @@ impl Desktop {
                         }
                     } else if query == self.search {
                         self.matches = rows.iter().map(|r| r.id).collect();
+                    }
+                }
+                "history_cleared" => {
+                    let count = v["count"].as_u64().unwrap_or(0);
+                    self.status = match count {
+                        0 => "No matching exchanges to clear".into(),
+                        1 => "Cleared 1 exchange".into(),
+                        n => format!("Cleared {n} exchanges"),
+                    };
+                    self.command(Command::Traffic(String::new()));
+                    if !self.search.is_empty() {
+                        self.command(Command::Traffic(self.search.clone()));
                     }
                 }
                 "detail" if v["value"]["transfer"].as_i64() == self.selected => {
@@ -453,6 +468,70 @@ mod tests {
         }
         Ok(())
     }
+    #[test]
+    #[ignore = "uses a local listener and folder watcher"]
+    fn clear_removed_partner_traffic() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        crate::sample(dir.path())?;
+        let config = dir.path().join("vendredi.toml");
+        let mut text = fs::read_to_string(&config)?.replace(":8180", ":0");
+        text.push_str(
+            r#"
+[[partners]]
+name = "Carrier"
+identity = ["CARRIER", "ZZ"]
+charset = "UNOC"
+acknowledge = "never"
+receive = [{ directory = "freight", suffix = ".edi" }]
+send = { directory = "freight-out" }
+"#,
+        );
+        fs::write(config, text)?;
+        let ctx = egui::Context::default();
+        let mut app = Desktop::open(dir.path().into(), &ctx)?;
+        for folder in ["inbox", "freight"] {
+            fs::write(dir.path().join(folder).join("sample.edi"), b"bad")?;
+        }
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.transfers.len() != 2 {
+            ensure!(
+                Instant::now() < deadline,
+                "folder intake timed out: {}",
+                app.status
+            );
+            app.drain();
+            thread::sleep(Duration::from_millis(10));
+        }
+        app.navigate(View::Partner(0));
+        click(&mut app, &ctx, "Remove partner")?;
+        click(&mut app, &ctx, "Confirm removal")?;
+        click(&mut app, &ctx, "Clear history…")?;
+        click(&mut app, &ctx, "Cancel")?;
+        assert_eq!(app.transfers.len(), 2);
+        click(&mut app, &ctx, "Clear history…")?;
+        click(&mut app, &ctx, "All partners")?;
+        click(&mut app, &ctx, "Supplier (removed)")?;
+        click(&mut app, &ctx, "Last hour")?;
+        click(&mut app, &ctx, "Clear history")?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.transfers.len() != 1 {
+            ensure!(Instant::now() < deadline, "cleanup failed: {}", app.status);
+            frame(&mut app, &ctx, vec![]);
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(app.transfers.values().next().unwrap().partner, "Carrier");
+        assert_eq!(app.status, "Cleared 1 exchange");
+        drop(app);
+        let mut reopened = Desktop::open(dir.path().into(), &ctx)?;
+        reopened.drain();
+        assert_eq!(reopened.transfers.len(), 1);
+        assert_eq!(
+            reopened.transfers.values().next().unwrap().partner,
+            "Carrier"
+        );
+        Ok(())
+    }
+
     fn text_matches_reply(v: &Value) -> bool {
         v["raw"].as_str().is_some_and(|s| s.contains("ORDRSP"))
     }
