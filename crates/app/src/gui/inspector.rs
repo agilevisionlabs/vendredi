@@ -137,6 +137,10 @@ impl Desktop {
             });
             return;
         };
+        if self.detail["transfer"].as_i64() != Some(row.id) {
+            ui.label(muted("Loading transfer…"));
+            return;
+        }
         let metadata: Value =
             serde_json::from_str(text(&self.detail, "metadata")).unwrap_or_default();
         let r = ui.max_rect();
@@ -297,12 +301,23 @@ impl Desktop {
                         .filter_map(|v| v.as_u64().map(|n| n as u8))
                         .collect::<Vec<_>>();
                     ui.ctx().copy_text(vendredi_core::edi::latin1(&bytes));
+                    self.status = "Raw message copied".into();
                 }
                 if ui
                     .add_enabled(
-                        self.listening,
+                        self.listening
+                            && self
+                                .workspace
+                                .partners
+                                .iter()
+                                .any(|p| p.name == row.partner),
                         LinkWidget::new(if row.outgoing { "Resend" } else { "Replay" }),
                     )
+                    .on_disabled_hover_text(if self.listening {
+                        "This partner has been removed."
+                    } else {
+                        "Start the listener to send traffic."
+                    })
                     .clicked()
                 {
                     self.command(if row.outgoing {

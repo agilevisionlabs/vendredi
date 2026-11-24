@@ -36,13 +36,13 @@ impl Desktop {
                     if ui.available_width() > 440. && self.listening {
                         ui.label(muted(format!(
                             "HTTP on :{} · {n} folder{} watched",
-                            self.workspace.listen.port(),
+                            self.address.port(),
                             if n == 1 { "" } else { "s" }
                         )));
                     }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if button(ui, "→  Send document…", true).clicked() {
-                            self.send_dialog = true;
+                            self.open_send();
                         }
                         if button(
                             ui,
@@ -82,11 +82,14 @@ impl Desktop {
                             .color(if attention > 0 { AMBER } else { MUTED }),
                     );
                     if !self.status.is_empty() {
-                        ui.label(muted(&self.status)).on_hover_text(&self.status);
+                        ui.add(Label::new(muted(&self.status)).truncate())
+                            .on_hover_text(&self.status);
                     }
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.label(muted(".vendredi/vendredi.db").monospace());
-                    });
+                    if self.status.is_empty() && ui.available_width() > 240. {
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            ui.label(muted(".vendredi/vendredi.db").monospace());
+                        });
+                    }
                 });
             });
         let rail = if ctx.content_rect().width() < 1000. {
@@ -138,8 +141,11 @@ impl Desktop {
                             self.view == View::Partner(p),
                             false,
                         ) {
-                            self.partner = p;
                             self.navigate(View::Partner(p));
+                            if self.view == View::Partner(p) {
+                                self.partner = p;
+                                self.compact_detail = false;
+                            }
                         }
                     }
                     ui.add_space(4.);
@@ -194,6 +200,25 @@ impl Desktop {
                     ui.separator();
                 }
                 let r = ui.available_rect_before_wrap();
+                if r.width() < 880. && r.height() < 485. {
+                    if self.compact_detail && self.selected.is_some() {
+                        if ui.button("‹  Back to traffic").clicked() {
+                            self.compact_detail = false;
+                        }
+                        let height = ui.available_height().max(440.);
+                        ScrollArea::vertical()
+                            .id_salt("compact-inspection")
+                            .show(ui, |ui| {
+                                let size = vec2(ui.available_width(), height);
+                                let (_, rect) = ui.allocate_space(size);
+                                self.inspector(&mut area(ui, rect, "compact-inspector"));
+                            });
+                    } else {
+                        self.table(&mut area(ui, r, "compact-table"), true);
+                        self.reconcile_selection();
+                    }
+                    return;
+                }
                 let (list, inspect) = if r.width() >= 880. {
                     let mid = r.center().x;
                     (
@@ -211,13 +236,13 @@ impl Desktop {
                 for rect in [list, inspect] {
                     ui.painter().rect_filled(rect, 0, BG);
                 }
-                self.table(&mut area(ui, list, "list"));
+                self.table(&mut area(ui, list, "list"), false);
                 self.reconcile_selection();
                 self.inspector(&mut area(ui, inspect, "inspector"));
             });
         self.dialogs(ctx);
     }
-    fn table(&mut self, ui: &mut Ui) {
+    fn table(&mut self, ui: &mut Ui, compact: bool) {
         let r = ui.max_rect();
         ui.spacing_mut().item_spacing = Vec2::ZERO;
         let bar = Rect::from_min_size(r.min, vec2(r.width(), 57.));
@@ -289,7 +314,7 @@ impl Desktop {
             .auto_shrink([false, false])
             .show(&mut body, |ui| {
                 ui.spacing_mut().item_spacing = Vec2::ZERO;
-                let w = ui.available_width().max(500.);
+                let w = ui.available_width().max(600.);
                 let cols = [0., 0.132, 0.233, 0.41, 0.547, 0.706, 1.];
                 let (head, _) = ui.allocate_exact_size(vec2(w, 36.), Sense::hover());
                 ui.painter().rect_filled(head, 0, PANEL);
@@ -390,66 +415,32 @@ impl Desktop {
                             if self.listening
                                 && self.root.join("order.edi").is_file()
                                 && ui.link("Send sample order").clicked()
-                                && let Err(e) = self.sample()
+                                && let Err(e) = self.sample(self.partner)
                             {
                                 self.status = e.to_string();
                             }
                         } else {
                             ui.label(muted("No matching transfers."));
+                            if (!self.search.is_empty()
+                                || self.direction != "Any"
+                                || self.filter_status != "Any")
+                                && ui.link("Clear filters").clicked()
+                            {
+                                self.search.clear();
+                                self.direction = "Any".into();
+                                self.filter_status = "Any".into();
+                            }
                         }
                     });
                 }
             });
         if let Some(id) = pick {
+            self.compact_detail = compact;
             self.select(id);
         }
     }
     fn dialogs(&mut self, ctx: &egui::Context) {
-        if self.send_dialog {
-            let mut open = true;
-            Window::new("Send document…")
-                .open(&mut open)
-                .resizable(false)
-                .collapsible(false)
-                .show(ctx, |ui| {
-                    ComboBox::from_label("Partner")
-                        .selected_text(&self.workspace.partners[self.partner].name)
-                        .show_ui(ui, |ui| {
-                            for (i, p) in self.workspace.partners.iter().enumerate() {
-                                ui.selectable_value(&mut self.partner, i, &p.name);
-                            }
-                        });
-                    ui.label("Document or script");
-                    ui.text_edit_singleline(&mut self.send_file);
-                    ui.label("Function (scripts)");
-                    ui.text_edit_singleline(&mut self.function);
-                    ui.horizontal(|ui| {
-                        if ui
-                            .add_enabled(self.listening, Button::new("Send"))
-                            .clicked()
-                        {
-                            self.command(Command::Send(
-                                self.workspace.partners[self.partner].name.clone(),
-                                self.send_file.trim().into(),
-                                (!self.function.trim().is_empty())
-                                    .then(|| self.function.trim().into()),
-                            ));
-                            self.send_dialog = false;
-                        }
-                        if self.root.join("order.edi").is_file()
-                            && ui
-                                .add_enabled(self.listening, Button::new("Send sample order"))
-                                .clicked()
-                        {
-                            if let Err(e) = self.sample() {
-                                self.status = e.to_string();
-                            }
-                            self.send_dialog = false;
-                        }
-                    });
-                });
-            self.send_dialog &= open;
-        }
+        self.send_window(ctx);
         self.cleanup_dialog(ctx);
         self.partner_dialog(ctx);
         self.partner_removal_dialog(ctx);

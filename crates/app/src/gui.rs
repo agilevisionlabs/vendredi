@@ -3,6 +3,7 @@ mod history;
 mod inspector;
 mod partners;
 mod scripts;
+mod send;
 mod theme;
 mod window;
 mod workspace_edit;
@@ -65,6 +66,7 @@ struct Desktop {
     output: runtime::Output,
     transfers: BTreeMap<i64, TrafficRow>,
     selected: Option<i64>,
+    compact_detail: bool,
     detail: Value,
     view: View,
     detail_tab: DetailTab,
@@ -74,7 +76,11 @@ struct Desktop {
     direction: String,
     filter_status: String,
     listening: bool,
+    address: std::net::SocketAddr,
     send_dialog: bool,
+    send_partner: usize,
+    send_script: bool,
+    send_error: String,
     partner_form: Option<partners::PartnerForm>,
     partner_removal: Option<partners::PartnerRemoval>,
     cleanup: Option<history::Cleanup>,
@@ -98,18 +104,19 @@ impl Desktop {
             let _ = tx.send(v);
             ctx.request_repaint();
         });
-        let running = runtime::start(workspace.clone(), output.clone(), true, true)?;
+        let address = workspace.listen;
+        let (running, listening, status) =
+            match runtime::start(workspace.clone(), output.clone(), true, true) {
+                Ok(r) => (r, true, String::new()),
+                Err(e) => (
+                    runtime::start(workspace.clone(), output.clone(), true, false)
+                        .with_context(|| format!("Opening workspace: {e:#}"))?,
+                    false,
+                    format!("Could not start listening: {e:#}"),
+                ),
+            };
         let edit_file = PathBuf::from("vendredi.toml");
         let saved = fs::read_to_string(root.join(&edit_file))?;
-        let send_file = workspace.partners[0]
-            .rules
-            .iter()
-            .flat_map(|r| &r.actions)
-            .find_map(|a| match a {
-                Action::Document { document } => Some(document.display().to_string()),
-                _ => None,
-            })
-            .unwrap_or_default();
         Ok(Self {
             root,
             workspace,
@@ -118,6 +125,7 @@ impl Desktop {
             output,
             transfers: BTreeMap::new(),
             selected: None,
+            compact_detail: false,
             detail: Value::Null,
             view: View::All,
             detail_tab: DetailTab::Message,
@@ -126,20 +134,24 @@ impl Desktop {
             matches: BTreeSet::new(),
             direction: "Any".into(),
             filter_status: "Any".into(),
-            listening: true,
+            listening,
+            address,
             send_dialog: false,
+            send_partner: 0,
+            send_script: false,
+            send_error: String::new(),
             partner_form: None,
             partner_removal: None,
             cleanup: None,
             script_form: None,
             partner: 0,
-            send_file,
+            send_file: String::new(),
             function: String::new(),
             edit_file,
             config_source: saved.clone(),
             edit: saved.clone(),
             saved,
-            status: String::new(),
+            status,
         })
     }
     fn command(&mut self, c: Command) {
@@ -197,8 +209,13 @@ impl Desktop {
                 "detail" if v["value"]["transfer"].as_i64() == self.selected => {
                     self.detail = v["value"].clone()
                 }
-                "detail" | "ready" => {}
-                "listening" => self.listening = v["active"] == true,
+                "detail" => {}
+                "ready" | "listening" => {
+                    self.listening = v["listen"].is_string();
+                    if let Some(addr) = v["listen"].as_str().and_then(|s| s.parse().ok()) {
+                        self.address = addr;
+                    }
+                }
                 "error" => self.status = v["error"].as_str().unwrap_or("Command failed").into(),
                 _ => {
                     refresh = true;
@@ -249,38 +266,6 @@ impl Desktop {
             self.detail = Value::Null;
         }
     }
-    fn sample(&self) -> Result<()> {
-        let p = &self.workspace.partners[self.partner];
-        let path = p
-            .receive
-            .iter()
-            .find_map(|r| {
-                if let Receive::Http { path } = r {
-                    Some(path)
-                } else {
-                    None
-                }
-            })
-            .context("this partner has no HTTP receive path")?;
-        let addr = self.workspace.listen;
-        let url = format!("http://{addr}{path}");
-        let d = Delivery {
-            id: 0,
-            channel: SendChannel::Http {
-                url,
-                headers: Default::default(),
-            },
-            bytes: fs::read(self.root.join("order.edi"))?,
-        };
-        let root = self.root.clone();
-        let out = self.output.clone();
-        thread::spawn(move || {
-            if let Err(e) = vendredi_transports::deliver(&root, &d) {
-                out(json!({"event":"error","error":format!("{e:#}")}));
-            }
-        });
-        Ok(())
-    }
     fn files(&self) -> Vec<PathBuf> {
         if self.view != View::Documents {
             return vec!["vendredi.toml".into()];
@@ -307,6 +292,7 @@ impl Desktop {
             self.status = "Save or reload the edited file before switching views".into();
             return;
         }
+        self.compact_detail = false;
         self.view = view;
         if matches!(self.view, View::Rules | View::Documents | View::Settings)
             && let Some(path) = self.files().first()
@@ -429,9 +415,12 @@ mod tests {
         time::{Duration, Instant},
     };
     fn frame(app: &mut Desktop, ctx: &egui::Context, events: Vec<Event>) -> egui::FullOutput {
+        let size = ctx
+            .data(|d| d.get_temp::<Vec2>(egui::Id::new("test screen size")))
+            .unwrap_or(Vec2::new(1080., 680.));
         ctx.run(
             RawInput {
-                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1080.0, 680.0))),
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
                 events,
                 ..Default::default()
             },
@@ -529,6 +518,93 @@ send = { directory = "freight-out" }
             reopened.transfers.values().next().unwrap().partner,
             "Carrier"
         );
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "exercises local listeners and both sample transports"]
+    fn send_and_compact_inspection() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        crate::sample(dir.path())?;
+        let path = dir.path().join("vendredi.toml");
+        let src = fs::read_to_string(&path)?;
+        let occupied = TcpListener::bind("127.0.0.1:0")?;
+        fs::write(
+            &path,
+            src.replace("127.0.0.1:8180", &occupied.local_addr()?.to_string()),
+        )?;
+        let ctx = egui::Context::default();
+        let mut app = Desktop::open(dir.path().into(), &ctx)?;
+        assert!(!app.listening);
+        assert!(app.status.contains("Could not start listening"));
+        drop(occupied);
+        click(&mut app, &ctx, "▷  Start")?;
+        let until = Instant::now() + Duration::from_secs(8);
+        while !app.listening {
+            ensure!(Instant::now() < until, "start timed out");
+            app.drain();
+        }
+        click(&mut app, &ctx, "→  Send document…")?;
+        app.send_file = "missing.edi".into();
+        click(&mut app, &ctx, "Send")?;
+        assert!(app.send_dialog && app.send_error.contains("missing.edi"));
+        app.send_file = "confirmation.edi".into();
+        click(&mut app, &ctx, "Send")?;
+        while !app
+            .transfers
+            .values()
+            .any(|t| t.outgoing && t.status == "Delivered")
+        {
+            ensure!(Instant::now() < until, "send timed out");
+            app.drain();
+        }
+        click(&mut app, &ctx, "Resend")?;
+        while app
+            .transfers
+            .values()
+            .filter(|t| t.status == "Delivered")
+            .count()
+            < 2
+        {
+            ensure!(Instant::now() < until, "resend timed out");
+            app.drain();
+        }
+        drop(app);
+        fs::write(
+            &path,
+            src.replace(":8180", ":0")
+                .replace(r#"{ path = "/supplier/orders" }, "#, "")
+                .replace(r#"suffix = ".edi""#, r#"suffix = ".custom""#),
+        )?;
+        let mut app = Desktop::open(dir.path().into(), &ctx)?;
+        app.drain();
+        assert_ne!(app.address.port(), 0);
+        app.sample(0)?;
+        while !app
+            .transfers
+            .values()
+            .any(|t| !t.outgoing && t.kind == "ORDERS")
+        {
+            ensure!(
+                Instant::now() < until,
+                "folder sample timed out: {}",
+                app.status
+            );
+            app.drain();
+        }
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new("test screen size"), Vec2::new(680., 420.)));
+        click(&mut app, &ctx, "ORDERS")?;
+        assert!(app.compact_detail);
+        while app.detail["transfer"].is_null() {
+            ensure!(Instant::now() < until, "inspect timed out");
+            app.drain();
+        }
+        let meta: Value = serde_json::from_str(app.detail["metadata"].as_str().unwrap())?;
+        assert!(meta["file"].as_str().unwrap().ends_with(".custom"));
+        click(&mut app, &ctx, "Copy raw")?;
+        assert_eq!(app.status, "Raw message copied");
+        click(&mut app, &ctx, "‹  Back to traffic")?;
+        assert!(!app.compact_detail);
         Ok(())
     }
 

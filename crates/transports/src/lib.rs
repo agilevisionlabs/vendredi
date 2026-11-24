@@ -32,6 +32,15 @@ pub struct Listeners {
     _watcher: RecommendedWatcher,
     http: Option<thread::JoinHandle<()>>,
 }
+impl Listeners {
+    pub fn address(&self) -> std::net::SocketAddr {
+        self.server
+            .server_addr()
+            .to_ip()
+            .expect("HTTP listener bound to an IP socket")
+    }
+}
+
 impl Drop for Listeners {
     fn drop(&mut self) {
         self.server.unblock();

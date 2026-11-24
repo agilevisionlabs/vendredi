@@ -54,7 +54,6 @@ impl Drop for Running {
 pub fn start(w: Workspace, out: Output, with_history: bool, listen: bool) -> Result<Running> {
     let (tx, rx) = mpsc::channel();
     let (ready, started) = mpsc::sync_channel(1);
-    let address = w.listen;
     let input = tx.clone();
     let delivered = tx.clone();
     let root = w.root.clone();
@@ -104,7 +103,7 @@ pub fn start(w: Workspace, out: Output, with_history: bool, listen: bool) -> Res
                 out(v);
             }
         }
-        out(json!({"event":"ready","listen":address.to_string()}));
+        out(json!({"event":"ready","listen":listeners.as_ref().map(|l| l.address().to_string())}));
         ready
             .send(Ok(()))
             .map_err(|_| anyhow!("launcher disconnected"))?;
@@ -143,7 +142,9 @@ pub fn start(w: Workspace, out: Output, with_history: bool, listen: bool) -> Res
                         }
                         Ok(())
                     };
-                    out(json!({"event":"listening","active":listeners.is_some()}));
+                    out(
+                        json!({"event":"listening","active":listeners.is_some(),"listen":listeners.as_ref().map(|l| l.address().to_string())}),
+                    );
                     result
                 }
                 Some(Command::Inspect(id)) => e
