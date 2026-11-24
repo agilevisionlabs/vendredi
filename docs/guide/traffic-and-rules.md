@@ -1,6 +1,6 @@
 # Find traffic and inspect its rules
 
-For the complete walkthrough with full-resolution screenshots, open the [workspace handbook](index.html).
+For the complete walkthrough with full-resolution screenshots, open the [workspace handbook](https://vendredi.app/guide/).
 
 ## Search the traffic table
 
