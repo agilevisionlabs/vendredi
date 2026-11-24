@@ -35,8 +35,6 @@ jobs:
       - run: cargo +stable test --workspace --locked -- --include-ignored
       - run: cargo +stable build --release --locked
       - run: python tests/local_instance.py --binary target/release/${{ matrix.binary }}
-      - if: runner.os == 'macOS'
-        run: python3 tests/release_macos.py target/release/vendredi
       - name: Install a software OpenGL driver for the Windows runner
         if: runner.os == 'Windows'
         id: msys2
@@ -56,6 +54,8 @@ jobs:
           Copy-Item (Join-Path $mesa 'opengl32.dll') target/release/
           ./tests/release_windows.ps1 target/release/vendredi.exe
       - run: python scripts/package_release.py target/release/${{ matrix.binary }} ${{ matrix.artifact }}
+      - if: runner.os == 'macOS'
+        run: python3 tests/release_macos.py target/dist/vendredi-${{ matrix.artifact }}.tar.gz
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: vendredi-${{ matrix.artifact }}
