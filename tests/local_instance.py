@@ -153,6 +153,29 @@ class LocalExchange(unittest.TestCase):
         self.assertEqual(len(files), 1)
         self.assertIn(b"UCI+ORDER42+BUYER:ZZ+SUPPLIER:ZZ+4'", files[0].read_bytes())
 
+    def test_slow_and_silent_http_receipts_preserve_scripted_content_fault(self):
+        base = self.config.replace('url = "http://127.0.0.1:8181/replies"', 'directory = "out"')
+        (self.root / "reply.js").write_text("""function reply(inbound, api) {
+            api.send(api.build("ORDRSP:D:96A:UN", "FTX+example'"));
+        }""")
+        for fault in ["slow_response", "no_response"]:
+            with self.subTest(fault=fault):
+                actions = '{ fault = "' + fault + '" }, { fault = "suppress_ack" }, { fault = "malformed" }, { script = "reply.js", function = "reply" }'
+                self.config = base.replace('{ document = "confirmation.edi" }', actions)
+                app = self.launch()
+                if fault == "slow_response":
+                    start = time.monotonic()
+                    self.assertEqual(self.post(self.order), (202, b""))
+                    self.assertGreaterEqual(time.monotonic() - start, 1.8)
+                else:
+                    with self.assertRaises((http.client.RemoteDisconnected, TimeoutError, ConnectionResetError)):
+                        self.post(self.order)
+                transfer = app.wait("delivered")["transfer"]
+                app.close()
+                reply = (self.root / "out" / f"vendredi-{transfer}.edi").read_bytes()
+                self.assertIn(b"FTX+example'", reply)
+                self.assertFalse(reply.endswith(b"'"))
+
     def test_envelope_faults_and_duplicate_delivery(self):
         self.config = self.config.replace('url = "http://127.0.0.1:8181/replies"', 'directory = "out"')
         actions = '{ fault = "duplicate_reference" }, { fault = "wrong_count" }, { fault = "duplicate" }, { document = "confirmation.edi" }'
