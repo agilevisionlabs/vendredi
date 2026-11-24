@@ -6,28 +6,57 @@ use vendredi_core::engine::TrafficSearch;
 pub(super) const HIGHLIGHT: Color32 = Color32::from_rgb(255, 220, 115);
 
 impl Desktop {
-    pub(super) fn update_search(&mut self) {
-        self.matches.clear();
-        self.highlight = None;
-        self.reveal_match = true;
-        if !self.search.is_empty() {
-            match TrafficSearch::new(&self.search) {
-                Ok(pattern) => {
-                    self.highlight = Some(pattern);
-                    self.command(Command::Traffic(self.search.clone()));
-                }
-                Err(e) => self.status = e.to_string(),
+    pub(super) fn edit_search(&mut self, ctx: &egui::Context) {
+        if self.search.is_empty() {
+            self.clear_search();
+        } else {
+            let delay = std::time::Duration::from_millis(100);
+            self.search_due = Some(std::time::Instant::now() + delay);
+            ctx.request_repaint_after(delay);
+        }
+    }
+
+    pub(super) fn dispatch_search(&mut self, ctx: &egui::Context) {
+        if let Some(due) = self.search_due {
+            if let Some(remaining) = due.checked_duration_since(std::time::Instant::now()) {
+                ctx.request_repaint_after(remaining);
+            } else {
+                self.search_due = None;
+                self.command(Command::Traffic(self.search.clone()));
             }
+        }
+    }
+
+    pub(super) fn apply_search(&mut self, query: &str, rows: Vec<TrafficRow>) {
+        self.matches = rows.into_iter().map(|r| r.id).collect();
+        if self
+            .highlight
+            .as_ref()
+            .is_some_and(|(text, _)| text == query)
+        {
+            return;
+        }
+        match TrafficSearch::new(query) {
+            Ok(pattern) => {
+                self.highlight = Some((query.to_owned(), pattern));
+                self.reveal_match = true;
+            }
+            Err(e) => self.status = e.to_string(),
         }
     }
 
     pub(super) fn clear_search(&mut self) {
         self.search.clear();
-        self.update_search();
+        self.search_due = None;
+        self.matches.clear();
+        self.highlight = None;
     }
 
     pub(super) fn hits(&self, text: &str) -> Vec<Range<usize>> {
-        self.highlight.iter().flat_map(|q| q.ranges(text)).collect()
+        self.highlight
+            .iter()
+            .flat_map(|(_, q)| q.ranges(text))
+            .collect()
     }
 }
 

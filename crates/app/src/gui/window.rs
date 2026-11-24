@@ -2,6 +2,7 @@ use super::*;
 use eframe::egui::*;
 impl Desktop {
     pub(super) fn show(&mut self, ctx: &egui::Context) {
+        self.dispatch_search(ctx);
         self.drain();
         TopBottomPanel::top("header")
             .exact_height(52.)
@@ -301,7 +302,7 @@ impl Desktop {
                             )
                             .changed()
                         {
-                            self.update_search();
+                            self.edit_search(ui.ctx());
                         }
                     });
                 });

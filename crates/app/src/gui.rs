@@ -116,7 +116,8 @@ struct Desktop {
     detail_tab: DetailTab,
     segment: usize,
     search: String,
-    highlight: Option<vendredi_core::engine::TrafficSearch>,
+    search_due: Option<std::time::Instant>,
+    highlight: Option<(String, vendredi_core::engine::TrafficSearch)>,
     reveal_match: bool,
     matches: BTreeSet<i64>,
     direction: String,
@@ -182,6 +183,7 @@ impl Desktop {
             detail_tab: DetailTab::Message,
             segment: 0,
             search: String::new(),
+            search_due: None,
             highlight: None,
             reveal_match: false,
             matches: BTreeSet::new(),
@@ -249,7 +251,7 @@ impl Desktop {
                             }
                         }
                     } else if query == self.search {
-                        self.matches = rows.iter().map(|r| r.id).collect();
+                        self.apply_search(query, rows);
                     }
                 }
                 "history_cleared" => {
@@ -294,7 +296,7 @@ impl Desktop {
         }
     }
     fn visible(&self, t: &TrafficRow) -> bool {
-        (self.search.is_empty() || self.matches.contains(&t.id))
+        (self.highlight.is_none() || self.matches.contains(&t.id))
             && (self.direction == "Any" || t.outgoing == (self.direction == "Out"))
             && (self.filter_status == "Any" || t.status == self.filter_status)
             && match self.view {
@@ -531,18 +533,21 @@ mod tests {
         label: &str,
         mut draw: impl FnMut(&egui::Context),
     ) -> Result<()> {
-        let output = render(ctx, vec![], &mut draw);
-        let pos = output
-            .shapes
-            .iter()
-            .rev() // A menu or modal can cover a label with the same text.
-            .find_map(|s| match &s.shape {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let pos = loop {
+            let output = render(ctx, vec![], &mut draw);
+            // A menu or modal can cover a label with the same text.
+            if let Some(pos) = output.shapes.iter().rev().find_map(|s| match &s.shape {
                 egui::Shape::Text(t) if t.galley.text() == label => {
                     Some(t.visual_bounding_rect().center())
                 }
                 _ => None,
-            })
-            .with_context(|| format!("missing widget {label}"))?;
+            }) {
+                break pos;
+            }
+            ensure!(Instant::now() < deadline, "missing widget {label}");
+            thread::sleep(Duration::from_millis(5));
+        };
         for pressed in [true, false] {
             render(
                 ctx,
@@ -760,6 +765,27 @@ send = { directory = "freight-out" }
             frame(&mut app, &ctx, vec![]);
             thread::sleep(Duration::from_millis(10));
         }
+        // Keep both panes on the last completed result while the user types.
+        let selected = app.selected.unwrap();
+        click(&mut app, &ctx, "Search traffic and message text")?;
+        frame(&mut app, &ctx, vec![Event::Text("Su".into())]);
+        assert!(app.visible(&app.transfers[&selected]));
+        assert_eq!(app.detail["transfer"], selected);
+        while app.highlight.is_none() {
+            ensure!(Instant::now() < end, "initial search timed out");
+            frame(&mut app, &ctx, vec![]);
+            thread::sleep(Duration::from_millis(5));
+        }
+        let previous = app.matches.clone();
+        frame(&mut app, &ctx, vec![Event::Text("p".into())]);
+        (app.output)(json!({"event":"traffic","search":"Su","rows":[]}));
+        frame(&mut app, &ctx, vec![Event::Text("p".into())]);
+        assert_eq!(app.search, "Supp");
+        assert_eq!(app.matches, previous);
+        assert!(app.visible(&app.transfers[&selected]));
+        assert_eq!(app.detail["transfer"], selected);
+        app.clear_search();
+        assert!(app.search_due.is_none() && app.highlight.is_none());
         click(&mut app, &ctx, "Confirm orders")?;
         assert!(app.view == View::Rules && app.rule_form.is_some());
         click(&mut app, &ctx, "Cancel")?;
@@ -797,6 +823,12 @@ send = { directory = "freight-out" }
             &ctx,
             vec![Event::Text("missing reference".into())],
         );
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while app.highlight.is_none() || !app.matches.is_empty() {
+            ensure!(Instant::now() < deadline, "no-match result timed out");
+            frame(&mut app, &ctx, vec![]);
+            thread::sleep(Duration::from_millis(5));
+        }
         click(&mut app, &ctx, "Clear filters")?;
         assert!(app.search.is_empty() && app.filter_status == "Any" && app.direction == "Any");
         for (query, expected) in [("Supplier", "Supplier"), ("bgm+220", "220")] {
