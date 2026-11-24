@@ -10,3 +10,4 @@ serde_json.workspace = true
 vendredi-core.workspace = true
 vendredi-transports.workspace = true
 eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
+tempfile = "3"

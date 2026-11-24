@@ -4236,6 +4236,7 @@ dependencies = [
  "anyhow",
  "eframe",
  "serde_json",
+ "tempfile",
  "vendredi-core",
  "vendredi-transports",
 ]
