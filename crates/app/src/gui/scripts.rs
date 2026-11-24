@@ -1,6 +1,6 @@
 use super::*;
-use egui::{ComboBox, Modal, ScrollArea, Ui};
-use partners::field;
+use egui::{ComboBox, ScrollArea, Ui};
+use form::field;
 use toml_edit::{DocumentMut, Table};
 use workspace_edit::{FileEdit, tables};
 
@@ -130,10 +130,11 @@ impl ScriptForm {
             }
         }
         field(ui, "Entry function", &mut self.function);
-        ui.label("JavaScript");
+        form::label(ui, "JavaScript");
         ui.add(
             egui::TextEdit::multiline(&mut self.source)
                 .code_editor()
+                .margin(egui::Margin::symmetric(10, 8))
                 .desired_rows(10)
                 .desired_width(f32::INFINITY),
         );
@@ -347,17 +348,15 @@ impl Desktop {
             return;
         };
         let mut close = false;
-        Modal::new("script editor".into()).show(ctx, |ui| {
-            ui.set_width((ctx.content_rect().width() - 48.).min(680.));
-            ui.heading(if f.binding.is_some() {
-                "Edit script"
-            } else {
-                "Add script"
-            });
+        let title = if f.binding.is_some() {
+            "Edit script"
+        } else {
+            "Add script"
+        };
+        form::modal(ctx, "script editor", title, 640., |ui| {
             ScrollArea::vertical()
                 .max_height((ctx.content_rect().height() - 220.).max(100.))
                 .show(ui, |ui| f.fields(ui, &self.workspace));
-            ui.separator();
             if !f.error.is_empty() {
                 ui.colored_label(AMBER, &f.error);
             }
@@ -366,7 +365,7 @@ impl Desktop {
                     "Remove this action from its rule? The JavaScript file stays in the workspace.",
                 );
             }
-            ui.horizontal(|ui| {
+            form::footer(ui, |ui| {
                 let detach = f.confirm_detach && ui.button("Confirm detach").clicked();
                 let save = !f.confirm_detach && button(ui, "Save script", true).clicked();
                 if save || detach {
@@ -383,12 +382,17 @@ impl Desktop {
                         Err(e) => f.error = format!("{e:#}"),
                     }
                 }
-                if ui.button("Cancel").clicked() {
+                if button(ui, "Cancel", false).clicked() {
                     close = true;
                 }
                 if !f.confirm_detach
                     && f.binding.is_some()
-                    && ui.button("Detach from rule").clicked()
+                    && ui
+                        .with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            ui.link("Detach from rule")
+                        })
+                        .inner
+                        .clicked()
                 {
                     f.confirm_detach = true;
                 }

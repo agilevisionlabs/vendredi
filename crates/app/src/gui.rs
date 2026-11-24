@@ -1,3 +1,4 @@
+mod form;
 mod inspector;
 mod partners;
 mod scripts;
@@ -425,6 +426,7 @@ mod tests {
         let pos = output
             .shapes
             .iter()
+            .rev() // A menu or modal can cover a label with the same text.
             .find_map(|s| match &s.shape {
                 egui::Shape::Text(t) if t.galley.text() == label => {
                     Some(t.visual_bounding_rect().center())

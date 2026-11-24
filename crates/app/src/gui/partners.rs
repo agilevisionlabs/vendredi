@@ -1,5 +1,6 @@
 use super::*;
-use egui::{ComboBox, Modal, ScrollArea, Ui};
+use egui::{Align, ComboBox, Layout, RichText, ScrollArea, Ui};
+use form::field;
 use toml_edit::DocumentMut;
 use vendredi_core::config::{Partner, Policy};
 use workspace_edit::tables;
@@ -10,6 +11,8 @@ pub(super) struct PartnerForm {
     headers: Vec<(String, String)>,
     error: String,
     confirm_remove: bool,
+    alternate_reply: Option<SendChannel>,
+    focus_name: bool,
 }
 impl PartnerForm {
     fn new(workspace: &Workspace, index: Option<usize>) -> Self {
@@ -41,6 +44,8 @@ impl PartnerForm {
             headers,
             error: String::new(),
             confirm_remove: false,
+            alternate_reply: None,
+            focus_name: index.is_none(),
         }
     }
 
@@ -105,7 +110,24 @@ impl PartnerForm {
     }
     fn fields(&mut self, ui: &mut Ui, workspace: &Workspace) {
         let p = &mut self.partner;
-        field(ui, "Partner name", &mut p.name);
+        ui.columns(2, |cols| {
+            let name = form::input(
+                &mut cols[0],
+                "Partner name",
+                &mut p.name,
+                "e.g. Acme Retail",
+            );
+            if self.focus_name {
+                name.request_focus();
+                self.focus_name = false;
+            }
+            form::input(
+                &mut cols[1],
+                "EDIFACT identifier",
+                &mut p.identity[0],
+                "e.g. ACME",
+            );
+        });
         if self
             .index
             .is_some_and(|i| workspace.partners[i].name != p.name)
@@ -114,18 +136,34 @@ impl PartnerForm {
                 "Existing traffic and script state are stored under the previous name.",
             ));
         }
-        field(ui, "EDIFACT identifier", &mut p.identity[0]);
-        ui.horizontal_wrapped(|ui| {
-            ui.label("Acknowledge");
-            for (v, s) in [
-                (Policy::Always, "Always"),
-                (Policy::Requested, "When requested"),
-                (Policy::Never, "Never"),
-            ] {
-                ui.selectable_value(&mut p.acknowledge, v, s);
-            }
-        });
-        ui.collapsing("EDIFACT options", |ui| {
+        let policy = match p.acknowledge {
+            Policy::Always => "Always acknowledge",
+            Policy::Requested => "Acknowledge on request",
+            Policy::Never => "Never acknowledge",
+        };
+        let mut header = egui::text::LayoutJob::default();
+        header.append(
+            "EDIFACT settings",
+            0.,
+            egui::TextFormat::simple(font(13.), TEXT),
+        );
+        header.append(
+            &format!("{} · {policy}", p.charset),
+            12.,
+            egui::TextFormat::simple(font(12.), MUTED),
+        );
+        let options = egui::CollapsingHeader::new(header).id_salt("partner EDIFACT settings");
+        options.show(ui, |ui| {
+            form::label(ui, "Send acknowledgements");
+            ui.horizontal_wrapped(|ui| {
+                for (v, s) in [
+                    (Policy::Always, "Always"),
+                    (Policy::Requested, "When requested"),
+                    (Policy::Never, "Never"),
+                ] {
+                    ui.radio_value(&mut p.acknowledge, v, s);
+                }
+            });
             for (i, component) in p.identity.iter_mut().enumerate().skip(1) {
                 let label = match i {
                     1 => "Identifier qualifier".into(),
@@ -162,56 +200,97 @@ impl PartnerForm {
                 field(ui, "Six service characters", s);
             }
         });
-        ui.separator();
-        ui.heading("Intake channels");
+        ui.add_space(2.);
+        let mut add = None;
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Intake channels").font(bold(15.)));
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.menu_button(RichText::new("+ Add channel").color(BLUE), |ui| {
+                    if ui.button("Folder").clicked() {
+                        add = Some(Receive::Folder {
+                            directory: PathBuf::new(),
+                            suffix: ".edi".into(),
+                        });
+                        ui.close();
+                    }
+                    if ui.button("HTTP path").clicked() {
+                        add = Some(Receive::Http { path: "/".into() });
+                        ui.close();
+                    }
+                });
+            });
+        });
+        if let Some(channel) = add {
+            p.receive.push(channel);
+        }
+        let multiple = p.receive.len() > 1;
         let mut remove = None;
         for (i, channel) in p.receive.iter_mut().enumerate() {
             ui.push_id(("intake", i), |ui| {
-                match channel {
-                    Receive::Http { path } => field(ui, "HTTP path", path),
-                    Receive::Folder { directory, suffix } => {
-                        path_field(ui, "Intake folder", directory, &workspace.root);
-                        field(ui, "Filename suffix", suffix);
+                form::card(ui, |ui| {
+                    match channel {
+                        Receive::Http { path } => field(ui, "HTTP path", path),
+                        Receive::Folder { directory, suffix } => {
+                            ui.horizontal_top(|ui| {
+                                let suffix_width = 104.;
+                                let folder_width = ui.available_width()
+                                    - suffix_width
+                                    - ui.spacing().item_spacing.x;
+                                ui.vertical(|ui| {
+                                    ui.set_width(folder_width);
+                                    path_field(ui, "Intake folder", directory);
+                                });
+                                ui.vertical(|ui| {
+                                    ui.set_width(suffix_width);
+                                    field(ui, "Filename suffix", suffix);
+                                });
+                            });
+                            resolved_path(ui, directory, &workspace.root);
+                        }
                     }
-                }
-                if ui.small_button("Remove channel").clicked() {
-                    remove = Some(i);
-                }
+                    if multiple && ui.link("Remove channel").clicked() {
+                        remove = Some(i);
+                    }
+                })
             });
         }
         if let Some(i) = remove {
             p.receive.remove(i);
         }
+        ui.add_space(2.);
+        let folder = matches!(p.send, SendChannel::Folder { .. });
+        let mut use_folder = folder;
         ui.horizontal(|ui| {
-            if ui.button("Add folder").clicked() {
-                p.receive.push(Receive::Folder {
-                    directory: PathBuf::new(),
-                    suffix: ".edi".into(),
-                });
-            }
-            if ui.button("Add HTTP path").clicked() {
-                p.receive.push(Receive::Http { path: "/".into() });
-            }
+            ui.label(RichText::new("Reply channel").font(bold(15.)));
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ComboBox::from_id_salt("reply transport")
+                    .selected_text(if folder { "Folder" } else { "HTTP" })
+                    .width(104.)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut use_folder, true, "Folder");
+                        ui.selectable_value(&mut use_folder, false, "HTTP");
+                    });
+            });
         });
-        ui.separator();
-        ui.heading("Reply channel");
-        ui.horizontal(|ui| {
-            let folder = matches!(p.send, SendChannel::Folder { .. });
-            if ui.selectable_label(folder, "Folder").clicked() && !folder {
-                p.send = SendChannel::Folder {
-                    directory: PathBuf::new(),
-                };
-            }
-            if ui.selectable_label(!folder, "HTTP").clicked() && folder {
-                p.send = SendChannel::Http {
-                    url: String::new(),
-                    headers: Default::default(),
-                };
-            }
-        });
-        match &mut p.send {
+        if use_folder != folder {
+            let next = self.alternate_reply.take().unwrap_or_else(|| {
+                if use_folder {
+                    SendChannel::Folder {
+                        directory: PathBuf::new(),
+                    }
+                } else {
+                    SendChannel::Http {
+                        url: String::new(),
+                        headers: Default::default(),
+                    }
+                }
+            });
+            self.alternate_reply = Some(std::mem::replace(&mut p.send, next));
+        }
+        form::card(ui, |ui| match &mut p.send {
             SendChannel::Folder { directory } => {
-                path_field(ui, "Reply folder", directory, &workspace.root)
+                path_field(ui, "Reply folder", directory);
+                resolved_path(ui, directory, &workspace.root);
             }
             SendChannel::Http { url, .. } => {
                 field(ui, "Reply URL", url);
@@ -232,21 +311,21 @@ impl PartnerForm {
                     self.headers.push(Default::default());
                 }
             }
-        }
+        });
     }
 }
 
-pub(super) fn field(ui: &mut Ui, label: &str, text: &mut String) {
-    let caption = ui.label(label);
-    ui.add(egui::TextEdit::singleline(text).desired_width(f32::INFINITY))
-        .labelled_by(caption.id);
-}
-fn path_field(ui: &mut Ui, label: &str, path: &mut PathBuf, root: &Path) {
+fn path_field(ui: &mut Ui, label: &str, path: &mut PathBuf) {
     let mut text = path.display().to_string();
-    field(ui, label, &mut text);
-    *path = text.into();
+    if form::input(ui, label, &mut text, "Folder path").changed() {
+        *path = text.into();
+    }
+}
+fn resolved_path(ui: &mut Ui, path: &Path, root: &Path) {
     if path.is_relative() && !path.as_os_str().is_empty() {
-        ui.label(muted(root.join(&*path).display().to_string()));
+        let full = root.join(path).display().to_string();
+        ui.add(egui::Label::new(muted(&full)).truncate())
+            .on_hover_text(full);
     }
 }
 
@@ -264,24 +343,22 @@ impl Desktop {
             return;
         };
         let mut close = false;
-        Modal::new("partner editor".into()).show(ctx, |ui| {
-            ui.set_width((ctx.content_rect().width() - 48.).min(490.));
-            ui.heading(if form.index.is_some() {
-                "Edit partner"
-            } else {
-                "Add partner"
-            });
+        let title = if form.index.is_some() {
+            "Edit partner"
+        } else {
+            "Add partner"
+        };
+        form::modal(ctx, "partner editor", title, 560., |ui| {
             ScrollArea::vertical()
                 .max_height((ctx.content_rect().height() - 220.).max(100.))
                 .show(ui, |ui| form.fields(ui, &self.workspace));
-            ui.separator();
             if !form.error.is_empty() {
                 ui.colored_label(AMBER, &form.error);
             }
             if form.confirm_remove {
                 ui.label("Remove this partner and its rules from the workspace?");
             }
-            ui.horizontal(|ui| {
+            form::footer(ui, |ui| {
                 let remove = form.confirm_remove && ui.button("Confirm removal").clicked();
                 let save = !form.confirm_remove && button(ui, "Save partner", true).clicked();
                 if save || remove {
@@ -304,13 +381,18 @@ impl Desktop {
                         Err(e) => form.error = format!("{e:#}"),
                     }
                 }
-                if ui.button("Cancel").clicked() {
+                if button(ui, "Cancel", false).clicked() {
                     close = true;
                 }
                 if !form.confirm_remove
                     && form.index.is_some()
                     && self.workspace.partners.len() > 1
-                    && ui.button("Remove partner").clicked()
+                    && ui
+                        .with_layout(Layout::left_to_right(Align::Center), |ui| {
+                            ui.link("Remove partner")
+                        })
+                        .inner
+                        .clicked()
                 {
                     form.confirm_remove = true;
                 }
@@ -338,6 +420,20 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = Desktop::open(dir.path().into(), &ctx)?;
         click(&mut app, &ctx, "+ Add partner")?;
+        click(&mut app, &ctx, "Folder")?;
+        click(&mut app, &ctx, "HTTP")?;
+        assert!(matches!(
+            app.partner_form.as_ref().unwrap().partner.send,
+            SendChannel::Http { .. }
+        ));
+        click(&mut app, &ctx, "HTTP")?;
+        click(&mut app, &ctx, "Folder")?;
+        assert!(
+            matches!(&app.partner_form.as_ref().unwrap().partner.send,SendChannel::Folder {directory} if directory == Path::new("replies-2"))
+        );
+        click(&mut app, &ctx, "+ Add channel")?;
+        click(&mut app, &ctx, "HTTP path")?;
+        assert_eq!(app.partner_form.as_ref().unwrap().partner.receive.len(), 2);
         let form = app.partner_form.as_mut().context("missing partner form")?;
         form.partner.name = "North Freight".into();
         form.partner.identity[0] = "NORTH".into();
