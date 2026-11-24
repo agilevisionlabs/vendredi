@@ -151,17 +151,13 @@ impl Desktop {
                         .font(mono_bold(18.)),
                     );
                     if !row.version.is_empty() {
-                        badge(ui, &row.version, LIGHT, SURFACE, true);
+                        badge(ui, &row.version, SECONDARY_TEXT, SURFACE, true);
                     }
                     badge(
                         ui,
                         &row.status,
                         if row.attention { AMBER } else { GREEN },
-                        if row.attention {
-                            Color32::from_rgb(58, 44, 18)
-                        } else {
-                            Color32::from_rgb(22, 48, 42)
-                        },
+                        if row.attention { AMBER_BG } else { GREEN_BG },
                         false,
                     );
                 });
@@ -213,7 +209,7 @@ impl Desktop {
                         );
                         ui.label(RichText::new(&step.title).font(bold(13.)));
                         if !step.note.is_empty() {
-                            ui.label(RichText::new(&step.note).size(12.).color(LIGHT));
+                            ui.label(RichText::new(&step.note).size(12.).color(SECONDARY_TEXT));
                         }
                         if let Some(link) = &step.link {
                             let label = match link {

@@ -1,20 +1,22 @@
 use eframe::egui::*;
-pub(super) const BG: Color32 = Color32::from_rgb(18, 21, 26);
-pub(super) const PANEL: Color32 = Color32::from_rgb(23, 27, 33);
-pub(super) const CODE: Color32 = Color32::from_rgb(14, 17, 21);
-pub(super) const SURFACE: Color32 = Color32::from_rgb(30, 35, 43);
-pub(super) const LINE: Color32 = Color32::from_rgb(42, 48, 58);
-pub(super) const EDGE: Color32 = Color32::from_rgb(58, 66, 80);
-pub(super) const TEXT: Color32 = Color32::from_rgb(231, 234, 240);
-pub(super) const MUTED: Color32 = Color32::from_rgb(152, 162, 179);
-pub(super) const LIGHT: Color32 = Color32::from_rgb(195, 202, 214);
-pub(super) const BLUE: Color32 = Color32::from_rgb(106, 165, 255);
-pub(super) const SELECTED: Color32 = Color32::from_rgb(28, 39, 56);
-pub(super) const AMBER: Color32 = Color32::from_rgb(245, 176, 76);
-pub(super) const GREEN: Color32 = Color32::from_rgb(111, 220, 170);
+pub(super) const BG: Color32 = Color32::from_rgb(255, 255, 255);
+pub(super) const PANEL: Color32 = Color32::from_rgb(247, 249, 252);
+pub(super) const CODE: Color32 = Color32::from_rgb(249, 250, 252);
+pub(super) const SURFACE: Color32 = Color32::from_rgb(235, 239, 244);
+pub(super) const LINE: Color32 = Color32::from_rgb(214, 221, 230);
+pub(super) const EDGE: Color32 = Color32::from_rgb(166, 178, 193);
+pub(super) const TEXT: Color32 = Color32::from_rgb(27, 39, 53);
+pub(super) const MUTED: Color32 = Color32::from_rgb(82, 97, 116);
+pub(super) const SECONDARY_TEXT: Color32 = Color32::from_rgb(55, 70, 87);
+pub(super) const BLUE: Color32 = Color32::from_rgb(29, 78, 216);
+pub(super) const SELECTED: Color32 = Color32::from_rgb(226, 237, 255);
+pub(super) const AMBER: Color32 = Color32::from_rgb(138, 75, 8);
+pub(super) const GREEN: Color32 = Color32::from_rgb(23, 100, 66);
+pub(super) const AMBER_BG: Color32 = Color32::from_rgb(254, 243, 214);
+pub(super) const GREEN_BG: Color32 = Color32::from_rgb(221, 244, 232);
 
 pub(super) fn install(ctx: &Context) {
-    ctx.set_theme(Theme::Dark);
+    ctx.set_theme(Theme::Light);
     let mut fonts = FontDefinitions::default();
     for (name, family, data) in [
         (
@@ -48,7 +50,7 @@ pub(super) fn install(ctx: &Context) {
             .insert(0, name.into());
     }
     ctx.set_fonts(fonts);
-    let mut visuals = Visuals::dark();
+    let mut visuals = Visuals::light();
     visuals.panel_fill = BG;
     visuals.window_fill = PANEL;
     visuals.extreme_bg_color = CODE;
@@ -70,7 +72,7 @@ pub(super) fn install(ctx: &Context) {
     }
     visuals.widgets.hovered.bg_fill = SELECTED;
     visuals.widgets.hovered.weak_bg_fill = SELECTED;
-    ctx.set_visuals_of(Theme::Dark, visuals);
+    ctx.set_visuals_of(Theme::Light, visuals);
     ctx.style_mut(|style| {
         style.text_styles.insert(TextStyle::Body, font(13.));
         style.text_styles.insert(TextStyle::Button, font(13.));
@@ -136,7 +138,7 @@ pub(super) fn nav(ui: &mut Ui, text: &str, trailing: &str, selected: bool, count
     if !trailing.is_empty() {
         if count {
             let b = Rect::from_center_size(r.right_center() - vec2(19., 0.), vec2(22., 18.));
-            p.rect_filled(b, 9, Color32::from_rgb(58, 44, 18));
+            p.rect_filled(b, 9, AMBER_BG);
             p.text(
                 b.center(),
                 Align2::CENTER_CENTER,
@@ -181,7 +183,7 @@ pub(super) fn time(ms: i64) -> String {
         .unwrap_or_default()
 }
 pub(super) fn button(ui: &mut Ui, label: &str, primary: bool) -> Response {
-    let text = RichText::new(label).color(if primary { CODE } else { TEXT });
+    let text = RichText::new(label).color(if primary { Color32::WHITE } else { TEXT });
     ui.add(
         Button::new(text)
             .min_size(vec2(0., 36.))

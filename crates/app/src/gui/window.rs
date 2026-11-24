@@ -19,7 +19,7 @@ impl Desktop {
                         .map(|p| format!("~/{}", p.display()))
                         .unwrap_or_else(|| path.clone());
                     if ui.available_width() > 800. {
-                        badge(ui, &short, LIGHT, SURFACE, true);
+                        badge(ui, &short, SECONDARY_TEXT, SURFACE, true);
                     }
                     ui.colored_label(if self.listening { GREEN } else { MUTED }, "●");
                     ui.label(
@@ -324,7 +324,7 @@ impl Desktop {
                         Align2::CENTER_CENTER,
                         if t.outgoing { "OUT" } else { "IN" },
                         font(11.),
-                        if t.outgoing { LIGHT } else { BG },
+                        if t.outgoing { SECONDARY_TEXT } else { BG },
                     );
                     cell(2, &t.partner, font(13.), TEXT);
                     cell(3, &t.kind, mono_bold(12.), TEXT);
