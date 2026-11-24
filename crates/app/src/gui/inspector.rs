@@ -399,7 +399,7 @@ impl Desktop {
             }
         }
     }
-    fn message(&mut self, ui: &mut Ui, r: Rect) {
+    fn message(&mut self, ui: &mut Ui, code: Rect) {
         let segments = array(&self.detail, "segments");
         let message = text(&self.detail, "raw");
         let hits = self.hits(message);
@@ -408,8 +408,6 @@ impl Desktop {
             self.reveal_match = false;
         }
         let mut offset = 0;
-        let split = (r.bottom() - 60.).max(r.top());
-        let code = Rect::from_min_max(r.min, pos2(r.right(), split));
         ui.painter().rect_filled(code, 0, CODE);
         let mut body = area(ui, code, "message-lines");
         body.spacing_mut().item_spacing = Vec2::ZERO;
@@ -491,63 +489,6 @@ impl Desktop {
                     }
                 }
             });
-        let bottom = Rect::from_min_max(code.left_bottom(), r.max);
-        ui.painter().rect_filled(bottom, 0, PANEL);
-        line(ui, bottom.left_top(), bottom.right_top());
-        let mut strip = area(ui, bottom.shrink2(vec2(16., 9.)), "components");
-        strip.style_mut().wrap_mode = Some(TextWrapMode::Extend);
-        strip.spacing_mut().item_spacing.x = 8.;
-        if let Some(seg) = segments.get(self.segment) {
-            ScrollArea::horizontal()
-                .id_salt("elements")
-                .show(&mut strip, |ui| {
-                    ui.horizontal_centered(|ui| {
-                        ui.label(
-                            RichText::new(if text(seg, "tag").is_empty() {
-                                format!("Segment {}", self.segment + 1)
-                            } else {
-                                format!("Segment {} · {}", self.segment + 1, text(seg, "tag"))
-                            })
-                            .strong()
-                            .size(12.),
-                        );
-                        for (i, field) in array(seg, "elements").iter().enumerate() {
-                            if let Some(parts) = field.as_array() {
-                                for (j, value) in parts
-                                    .iter()
-                                    .enumerate()
-                                    .filter(|(_, v)| v.as_str().is_some_and(|s| !s.is_empty()))
-                                {
-                                    Frame::new()
-                                        .fill(SURFACE)
-                                        .corner_radius(5)
-                                        .inner_margin(Margin::symmetric(8, 3))
-                                        .show(ui, |ui| {
-                                            ui.vertical(|ui| {
-                                                ui.spacing_mut().item_spacing.y = 1.;
-                                                let label = if parts.len() > 1 {
-                                                    format!(
-                                                        "Element {} · component {}",
-                                                        i + 1,
-                                                        j + 1
-                                                    )
-                                                } else {
-                                                    format!("Element {}", i + 1)
-                                                };
-                                                ui.label(muted(label).size(11.));
-                                                ui.label(
-                                                    RichText::new(value.as_str().unwrap_or(""))
-                                                        .monospace()
-                                                        .size(12.),
-                                                );
-                                            });
-                                        });
-                                }
-                            }
-                        }
-                    });
-                });
-        }
     }
 }
 use egui::Link as LinkWidget;
