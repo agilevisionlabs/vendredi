@@ -142,6 +142,32 @@ class LocalExchange(unittest.TestCase):
             self.assertEqual(db.execute("select count(*) from transfers t join executions e on e.id=t.execution where t.direction='out' and e.root=1").fetchone(), (2,))
             self.assertEqual(db.execute("select count(*) from transfers where resend_of=?", (failed,)).fetchone(), (1,))
 
+    def test_transport_and_acknowledgement_faults(self):
+        self.config = self.config.replace('url = "http://127.0.0.1:8181/replies"', 'directory = "out"')
+        self.config = self.config.replace('{ document = "confirmation.edi" }', '{ fault = "http500" }, { fault = "reject" }')
+        app = self.launch()
+        self.assertEqual(self.post(self.order), (500, b""))
+        app.wait("delivered")
+        app.close()
+        files = list((self.root / "out").glob("*.edi"))
+        self.assertEqual(len(files), 1)
+        self.assertIn(b"UCI+ORDER42+BUYER:ZZ+SUPPLIER:ZZ+4'", files[0].read_bytes())
+
+    def test_folder_delivery_failure_can_be_resent(self):
+        self.config = self.config.replace('url = "http://127.0.0.1:8181/replies"', 'directory = "out"')
+        app = self.launch()
+        output = self.root / "out"
+        output.rmdir()
+        output.write_text("unavailable")
+        app.command("send", "Supplier", "confirmation.edi")
+        failed = app.wait("failed")["transfer"]
+        output.unlink()
+        output.mkdir()
+        app.command("resend", str(failed))
+        delivered = app.wait("delivered")["transfer"]
+        app.close()
+        self.assertIn(b"ORDRSP:D:96A:UN", (output / f"vendredi-{delivered}.edi").read_bytes())
+
     def test_folder_publication_and_recovered_claim(self):
         self.config = self.config.replace('url = "http://127.0.0.1:8181/replies"', 'directory = "out"')
         app = self.launch()

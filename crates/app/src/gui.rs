@@ -18,7 +18,7 @@ use vendredi_core::{
 pub fn run(root: PathBuf) -> Result<()> {
     let opts = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1080.0, 680.0])
+            .with_inner_size([960.0, 600.0])
             .with_min_inner_size([680.0, 420.0]),
         ..Default::default()
     };
@@ -134,6 +134,7 @@ impl Desktop {
                     }
                     "delivered" => t.status = "Delivered".into(),
                     "failed" => t.status = "Failed".into(),
+                    "interrupted" => t.status = "Interrupted".into(),
                     "finding" => t.status = "Validation finding".into(),
                     _ => {}
                 }
@@ -247,6 +248,7 @@ impl Desktop {
                         ui.monospace(raw);
                         for (title, key) in [
                             ("Exact bytes", "bytes"),
+                            ("Acknowledgements", "interchanges"),
                             ("Parsed segments and findings", "parsed"),
                             ("Execution history", "events"),
                             ("Transport metadata", "metadata"),
@@ -372,8 +374,8 @@ fn replace(path: &Path, text: &str) -> Result<()> {
     f.persist(path)?;
     Ok(())
 }
-impl eframe::App for Desktop {
-    fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+impl Desktop {
+    fn show(&mut self, ctx: &egui::Context) {
         self.drain();
         egui::TopBottomPanel::top("menu").show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -393,5 +395,169 @@ impl eframe::App for Desktop {
                 self.editor(ui);
             }
         });
+    }
+}
+
+impl eframe::App for Desktop {
+    fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        self.show(ctx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::{Event, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2};
+    use std::{
+        net::TcpListener,
+        time::{Duration, Instant},
+    };
+    fn frame(app: &mut Desktop, ctx: &egui::Context, events: Vec<Event>) -> egui::FullOutput {
+        ctx.run(
+            RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1080.0, 680.0))),
+                events,
+                ..Default::default()
+            },
+            |ctx| app.show(ctx),
+        )
+    }
+    fn click(app: &mut Desktop, ctx: &egui::Context, label: &str) -> Result<()> {
+        let output = frame(app, ctx, vec![]);
+        let pos = output
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.text() == label => {
+                    Some(t.visual_bounding_rect().center())
+                }
+                _ => None,
+            })
+            .with_context(|| format!("missing widget {label}"))?;
+        for pressed in [true, false] {
+            frame(
+                app,
+                ctx,
+                vec![
+                    Event::PointerMoved(pos),
+                    Event::PointerButton {
+                        pos,
+                        button: PointerButton::Primary,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        Ok(())
+    }
+    #[test]
+    #[ignore = "opens a local loopback listener; run with the local instance suite"]
+    fn exchange_edit_and_reopen() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        crate::sample(dir.path())?;
+        let config = dir.path().join("vendredi.toml");
+        let addr = TcpListener::bind("127.0.0.1:0")?.local_addr()?;
+        fs::write(
+            &config,
+            fs::read_to_string(&config)?.replace("127.0.0.1:8180", &addr.to_string()),
+        )?;
+        let ctx = egui::Context::default();
+        let mut app = Desktop::open(dir.path().to_owned(), &ctx)?;
+        click(&mut app, &ctx, "Send sample order")?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app
+            .transfers
+            .values()
+            .filter(|t| t.status == "Delivered")
+            .count()
+            != 2
+        {
+            ensure!(
+                Instant::now() < deadline,
+                "sample exchange did not finish: {}",
+                app.status
+            );
+            frame(&mut app, &ctx, vec![]);
+            thread::sleep(Duration::from_millis(10));
+        }
+        let (&id, t) = app.transfers.last_key_value().unwrap();
+        let label = format!("#{id}   {}   {}   {}", t.partner, t.kind, t.status);
+        click(&mut app, &ctx, &label)?;
+        while app.detail.is_null() {
+            ensure!(Instant::now() < deadline, "inspect timed out");
+            app.drain();
+        }
+        assert!(app.detail["raw"].as_str().unwrap().contains("ORDRSP"));
+        click(&mut app, &ctx, "Workspace")?;
+        // Drive the multiline editor with the same keyboard events as Select All and paste.
+        let changed = app
+            .edit
+            .replace("message = \"ORDERS\"", "message = \"INVOIC\"");
+        let edit_pos = Pos2::new(80.0, 125.0);
+        frame(
+            &mut app,
+            &ctx,
+            vec![
+                Event::PointerMoved(edit_pos),
+                Event::PointerButton {
+                    pos: edit_pos,
+                    button: PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Modifiers::NONE,
+                },
+            ],
+        );
+        frame(
+            &mut app,
+            &ctx,
+            vec![
+                Event::PointerButton {
+                    pos: edit_pos,
+                    button: PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Modifiers::NONE,
+                },
+                Event::Key {
+                    key: egui::Key::A,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::COMMAND,
+                },
+                Event::Paste(changed.clone()),
+            ],
+        );
+        assert_eq!(app.edit, changed);
+        click(&mut app, &ctx, "Save and reload")?;
+        assert_eq!(fs::read_to_string(config)?, changed);
+        drop(app);
+        let w = Workspace::load(dir.path())?;
+        let (send, recv) = mpsc::channel();
+        let mut run = runtime::start(
+            w,
+            Arc::new(move |v| {
+                let _ = send.send(v);
+            }),
+            true,
+            true,
+        )?;
+        assert!(recv.try_iter().any(|v| v["event"] == "delivered"));
+        let d = Delivery {
+            id: 0,
+            bytes: crate::ORDER.to_vec(),
+            channel: SendChannel::Http {
+                url: format!("http://{addr}/supplier/orders"),
+                headers: Default::default(),
+            },
+        };
+        vendredi_transports::deliver(dir.path(), &d)?;
+        loop {
+            let event = recv.recv_timeout(Duration::from_secs(5))?;
+            if event["event"] == "no_match" {
+                break;
+            }
+        }
+        run.stop()
     }
 }
