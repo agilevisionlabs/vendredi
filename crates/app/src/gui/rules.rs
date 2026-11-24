@@ -4,6 +4,35 @@ use toml_edit::DocumentMut;
 use vendredi_core::config::{Fault, Rule};
 use workspace_edit::tables;
 
+fn rule_row(ui: &mut Ui, height: f32, mut cell: impl FnMut(usize, &mut Ui)) {
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+    let mut left = rect.left();
+    for (index, column) in [
+        48.,
+        (width - 102.) * 0.58,
+        (width - 102.) * 0.21,
+        (width - 102.) * 0.21,
+        54.,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let bounds = egui::Rect::from_min_max(
+            egui::pos2(left, rect.top()),
+            egui::pos2(left + column - 5., rect.bottom()),
+        );
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(bounds)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        child.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+        cell(index, &mut child);
+        left += column;
+    }
+}
+
 pub(super) struct RuleForm {
     partner: usize,
     index: Option<usize>,
@@ -282,46 +311,66 @@ impl Desktop {
     }
 
     pub(super) fn rules(&mut self, ui: &mut Ui) {
+        ui.set_max_width(ui.available_width().min(820.));
         ui.horizontal(|ui| {
             ui.heading("Rules");
-            if button(ui, "Add rule", true).clicked() {
-                self.rule_form = Some(RuleForm::new(&self.workspace, self.partner, None));
-            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if button(ui, "Add rule", true).clicked() {
+                    self.rule_form = Some(RuleForm::new(&self.workspace, self.partner, None));
+                }
+            });
         });
-        ui.add_space(8.);
+        ui.add_space(12.);
         ScrollArea::vertical().show(ui, |ui| {
             for (p, partner) in self.workspace.partners.iter().enumerate() {
-                ui.label(egui::RichText::new(&partner.name).font(bold(15.)));
-                if partner.rules.is_empty() {
-                    ui.label(muted("No rules configured."));
-                }
-                for (i, r) in partner.rules.iter().enumerate() {
-                    ui.push_id((p, i), |ui| {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(muted((i + 1).to_string()));
-                            if ui.link(&r.name).clicked() {
-                                self.rule_form = Some(RuleForm::new(&self.workspace, p, Some(i)));
-                            }
-                            ui.monospace(
-                                [
-                                    Some(r.message.as_str()),
-                                    r.version.as_deref(),
-                                    r.release.as_deref(),
-                                ]
-                                .into_iter()
-                                .flatten()
-                                .collect::<Vec<_>>()
-                                .join(" · "),
+                ui.push_id(p, |ui| {
+                    form::card(ui, |ui| {
+                        ui.label(egui::RichText::new(&partner.name).font(bold(15.)));
+                        ui.add_space(4.);
+                        if partner.rules.is_empty() {
+                            ui.label(muted("No rules configured."));
+                            return;
+                        }
+                        rule_row(ui, 24., |col, ui| {
+                            form::label(
+                                ui,
+                                ["Order", "Rule", "Message", "Directory", "Actions"][col],
                             );
-                            ui.label(muted(format!(
-                                "{} action{}",
-                                r.actions.len(),
-                                if r.actions.len() == 1 { "" } else { "s" }
-                            )));
                         });
+                        ui.separator();
+                        for (i, rule) in partner.rules.iter().enumerate() {
+                            rule_row(ui, 30., |col, ui| match col {
+                                0 => {
+                                    ui.label(muted((i + 1).to_string()));
+                                }
+                                1 => {
+                                    if ui.link(&rule.name).on_hover_text(&rule.name).clicked() {
+                                        self.rule_form =
+                                            Some(RuleForm::new(&self.workspace, p, Some(i)));
+                                    }
+                                }
+                                2 => {
+                                    ui.monospace(&rule.message).on_hover_text(&rule.message);
+                                }
+                                3 => {
+                                    let directory = match (&rule.version, &rule.release) {
+                                        (None, None) => "Any".into(),
+                                        (v, r) => format!(
+                                            "{}.{}",
+                                            v.as_deref().unwrap_or("*"),
+                                            r.as_deref().unwrap_or("*")
+                                        ),
+                                    };
+                                    ui.label(muted(&directory)).on_hover_text(directory);
+                                }
+                                _ => {
+                                    ui.label(rule.actions.len().to_string());
+                                }
+                            });
+                        }
                     });
-                }
-                ui.separator();
+                });
+                ui.add_space(10.);
             }
         });
     }
