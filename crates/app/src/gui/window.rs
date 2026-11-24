@@ -161,7 +161,14 @@ impl Desktop {
                         ("Documents", View::Documents),
                         ("Settings", View::Settings),
                     ] {
-                        if nav(ui, name, "", self.view == view, false) {
+                        if nav(
+                            ui,
+                            name,
+                            "",
+                            self.view == view
+                                || (view == View::Settings && self.view == View::Config),
+                            false,
+                        ) {
                             self.navigate(view);
                         }
                     }
@@ -170,6 +177,12 @@ impl Desktop {
         CentralPanel::default()
             .frame(Frame::new().fill(BG))
             .show(ctx, |ui| {
+                if self.view == View::Settings {
+                    Frame::new()
+                        .inner_margin(16)
+                        .show(ui, |ui| self.settings(ui));
+                    return;
+                }
                 if self.view == View::Rules {
                     Frame::new().inner_margin(16).show(ui, |ui| self.rules(ui));
                     return;
@@ -454,5 +467,6 @@ impl Desktop {
         self.partner_removal_dialog(ctx);
         self.script_dialog(ctx);
         self.rule_dialog(ctx);
+        self.settings_dialog(ctx);
     }
 }

@@ -83,11 +83,16 @@ impl ScriptForm {
     }
 
     fn fields(&mut self, ui: &mut Ui, w: &Workspace) {
-        self.select_rule(ui, w);
-        ui.separator();
+        if self.binding.is_none() {
+            self.select_rule(ui, w);
+            ui.separator();
+        }
         if self.original.is_some() {
-            ui.label("Script file");
-            ui.monospace(&self.file);
+            ui.columns(2, |cols| {
+                form::label(&mut cols[0], "Script file");
+                cols[0].monospace(&self.file);
+                field(&mut cols[1], "Entry function", &mut self.function);
+            });
         } else {
             let existing: BTreeSet<_> = w
                 .partners
@@ -129,7 +134,9 @@ impl ScriptForm {
                 self.error = format!("{e:#}");
             }
         }
-        field(ui, "Entry function", &mut self.function);
+        if self.original.is_none() {
+            field(ui, "Entry function", &mut self.function);
+        }
         form::label(ui, "JavaScript");
         ui.add(
             egui::TextEdit::multiline(&mut self.source)
@@ -138,6 +145,16 @@ impl ScriptForm {
                 .desired_rows(10)
                 .desired_width(f32::INFINITY),
         );
+        if self.binding.is_some() {
+            let name = &w.partners[self.partner].name;
+            let rule = self
+                .rule
+                .map(|i| w.partners[self.partner].rules[i].name.as_str())
+                .unwrap_or("New rule");
+            egui::CollapsingHeader::new(format!("Run for {name} · {rule}"))
+                .id_salt("script binding")
+                .show(ui, |ui| self.select_rule(ui, w));
+        }
     }
 
     fn check_new_path(&self) -> Result<()> {
@@ -230,8 +247,8 @@ impl ScriptForm {
             doc.to_string(),
             Some(FileEdit {
                 path: &path,
-                before: self.original.as_deref(),
-                after: &self.source,
+                before: self.original.as_ref().map(|s| s.as_bytes()),
+                after: self.source.as_bytes(),
             }),
         )
     }
@@ -319,24 +336,43 @@ impl Desktop {
         ui.add_space(8.);
         let mut picked = None;
         ScrollArea::vertical().show(ui, |ui| {
-            let mut any=false;
-            for (partner,p) in self.workspace.partners.iter().enumerate() {
-                let mut heading=false;
-                for (rule,r) in p.rules.iter().enumerate() {
-                    for (action,a) in r.actions.iter().enumerate() {
-                        if let Action::Script{script,function}=a {
-                            if !heading {ui.heading(&p.name); heading=true; any=true;}
-                            ui.push_id((partner,rule,action),|ui| {ui.horizontal_wrapped(|ui|{
-                                if ui.link(script.display().to_string()).clicked() {picked=Some(Binding{partner,rule,action});}
-                                ui.monospace(format!("{function}()"));
-                                ui.label(muted(format!("{} · {}",r.name,r.message)));
-                            });});
+            let mut any = false;
+            for (partner, p) in self.workspace.partners.iter().enumerate() {
+                let mut first = true;
+                for (rule, r) in p.rules.iter().enumerate() {
+                    for (action, a) in r.actions.iter().enumerate() {
+                        let Action::Script { script, function } = a else {
+                            continue;
+                        };
+                        if first {
+                            ui.label(egui::RichText::new(&p.name).font(bold(15.)));
+                            first = false;
+                            any = true;
                         }
+                        ui.push_id((partner, rule, action), |ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                if ui.link(script.display().to_string()).clicked() {
+                                    picked = Some(Binding {
+                                        partner,
+                                        rule,
+                                        action,
+                                    });
+                                }
+                                ui.monospace(format!("{function}()"));
+                                ui.label(muted(format!("{} · {}", r.name, r.message)));
+                            });
+                        });
                     }
                 }
-                if heading {ui.separator();}
+                if !first {
+                    ui.separator();
+                }
             }
-            if !any {ui.label("No scripts configured. Add a script to run JavaScript when a partner rule matches.");}
+            if !any {
+                ui.label(muted(
+                    "No scripts configured. Add a script to run when a partner rule matches.",
+                ));
+            }
         });
         if let Some(b) = picked {
             self.edit_binding(b);
@@ -348,25 +384,30 @@ impl Desktop {
             return;
         };
         let mut close = false;
-        let title = if f.binding.is_some() {
+        let title = if f.confirm_detach {
+            "Detach script?"
+        } else if f.binding.is_some() {
             "Edit script"
         } else {
             "Add script"
         };
-        form::modal(ctx, "script editor", title, 640., |ui| {
-            ScrollArea::vertical()
-                .max_height((ctx.content_rect().height() - 220.).max(100.))
-                .show(ui, |ui| f.fields(ui, &self.workspace));
+        let escaped = form::modal(ctx, "script editor", title, 640., |ui| {
+            if f.confirm_detach {
+                ui.label(format!(
+                    "Remove {} from this rule? The JavaScript file stays in the workspace.",
+                    f.file
+                ));
+            } else {
+                ScrollArea::vertical()
+                    .max_height((ctx.content_rect().height() - 220.).max(100.))
+                    .show(ui, |ui| f.fields(ui, &self.workspace));
+            }
             if !f.error.is_empty() {
                 ui.colored_label(AMBER, &f.error);
             }
-            if f.confirm_detach {
-                ui.label(
-                    "Remove this action from its rule? The JavaScript file stays in the workspace.",
-                );
-            }
             form::footer(ui, |ui| {
-                let detach = f.confirm_detach && ui.button("Confirm detach").clicked();
+                let detach =
+                    f.confirm_detach && ui.add(form::removal_button("Confirm detach")).clicked();
                 let save = !f.confirm_detach && button(ui, "Save script", true).clicked();
                 if save || detach {
                     match f.update(self, detach) {
@@ -395,10 +436,11 @@ impl Desktop {
                         .clicked()
                 {
                     f.confirm_detach = true;
+                    f.error.clear();
                 }
             });
         });
-        if !close {
+        if !close && !escaped {
             self.script_form = Some(f);
         }
     }

@@ -5,6 +5,7 @@ mod partners;
 mod rules;
 mod scripts;
 mod send;
+mod settings;
 mod theme;
 mod window;
 mod workspace_edit;
@@ -89,6 +90,7 @@ enum View {
     Scripts,
     Documents,
     Settings,
+    Config,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 enum DetailTab {
@@ -127,6 +129,9 @@ struct Desktop {
     cleanup: Option<history::Cleanup>,
     script_form: Option<scripts::ScriptForm>,
     rule_form: Option<rules::RuleForm>,
+    settings_form: Option<settings::SettingsForm>,
+    file_error: Option<String>,
+    file_unavailable: bool,
     partner: usize,
     send_file: String,
     function: String,
@@ -188,6 +193,9 @@ impl Desktop {
             cleanup: None,
             script_form: None,
             rule_form: None,
+            settings_form: None,
+            file_error: None,
+            file_unavailable: false,
             partner: 0,
             send_file: String::new(),
             function: String::new(),
@@ -333,47 +341,77 @@ impl Desktop {
             return;
         }
         if self.edit != self.saved {
-            self.status = "Save or reload the edited file before switching views".into();
+            self.status = "Save or discard your edits before switching views".into();
             return;
         }
         self.compact_detail = false;
         self.view = view;
-        if matches!(self.view, View::Documents | View::Settings)
+        if matches!(self.view, View::Documents | View::Config)
             && let Some(path) = self.files().first()
         {
             self.open_file(path.clone());
         }
     }
     fn open_file(&mut self, path: PathBuf) {
-        match fs::read_to_string(self.root.join(&path)) {
+        let result = fs::read(self.root.join(&path))
+            .map_err(anyhow::Error::from)
+            .and_then(|bytes| {
+                if self.view == View::Documents {
+                    Ok(vendredi_core::edi::latin1(&bytes))
+                } else {
+                    Ok(String::from_utf8(bytes)?)
+                }
+            });
+        let changed_file = self.edit_file != path;
+        self.edit_file = path;
+        match result {
             Ok(text) => {
-                self.edit_file = path;
-                self.saved = text.clone();
-                self.edit = text;
+                self.edit.clone_from(&text);
+                self.saved = text;
+                self.file_error = None;
+                self.file_unavailable = false;
             }
-            Err(e) => self.status = e.to_string(),
+            Err(e) => {
+                self.file_error = Some(format!("Opening {}: {e:#}", self.edit_file.display()));
+                if changed_file || self.edit == self.saved {
+                    self.edit.clear();
+                    self.saved.clear();
+                    self.file_unavailable = true;
+                }
+                // On a failed explicit reload, keep the current draft available for recovery.
+            }
         }
     }
     fn save(&mut self) -> Result<()> {
         let file = self.root.join(&self.edit_file);
-        let before = self.saved.clone();
-        let after = self.edit.clone();
+        let encode = |s: &str| -> Result<Vec<u8>> {
+            if self.view == View::Documents {
+                s.chars()
+                    .map(|c| {
+                        u8::try_from(u32::from(c))
+                            .context("The EDIFACT document can only store Latin-1 characters.")
+                    })
+                    .collect()
+            } else {
+                Ok(s.as_bytes().to_vec())
+            }
+        };
+        let before = encode(&self.saved)?;
+        let after = encode(&self.edit)?;
         self.apply_files(&[workspace_edit::FileEdit {
             path: &file,
             before: Some(&before),
             after: &after,
         }])?;
-        if self.edit_file == Path::new("vendredi.toml") {
-            self.config_source.clone_from(&after);
-        }
-        self.saved = after;
+        self.saved.clone_from(&self.edit);
+        self.file_error = None;
         self.status = "Saved and reloaded workspace".into();
         Ok(())
     }
     fn editor(&mut self, ui: &mut egui::Ui) {
         let title = match self.view {
             View::Documents => "Documents",
-            _ => "Settings",
+            _ => "Workspace configuration",
         };
         ui.heading(title);
         ui.add_space(8.);
@@ -385,48 +423,56 @@ impl Desktop {
             return;
         }
         let dirty = self.edit != self.saved;
-        ui.horizontal(|ui| {
-            let mut next = self.edit_file.clone();
-            ui.add_enabled_ui(!dirty, |ui| {
-                egui::ComboBox::from_id_salt("files")
-                    .selected_text(next.display().to_string())
-                    .show_ui(ui, |ui| {
-                        for file in self.files() {
-                            let name = file.display().to_string();
-                            ui.selectable_value(&mut next, file, name);
-                        }
-                    });
-            });
-            if next != self.edit_file {
-                match fs::read_to_string(self.root.join(&next)) {
-                    Ok(text) => {
-                        self.edit_file = next;
-                        self.edit = text.clone();
-                        self.saved = text;
-                    }
-                    Err(e) => self.status = e.to_string(),
+        ui.horizontal_wrapped(|ui| {
+            if self.view == View::Documents {
+                let mut next = self.edit_file.clone();
+                ui.add_enabled_ui(!dirty, |ui| {
+                    egui::ComboBox::from_id_salt("files")
+                        .selected_text(next.display().to_string())
+                        .show_ui(ui, |ui| {
+                            for file in self.files() {
+                                let name = file.display().to_string();
+                                ui.selectable_value(&mut next, file, name);
+                            }
+                        })
+                });
+                if next != self.edit_file {
+                    self.open_file(next);
                 }
+            } else {
+                ui.monospace("vendredi.toml");
             }
             if ui
                 .add_enabled(dirty, egui::Button::new("Save and reload"))
                 .clicked()
                 && let Err(e) = self.save()
             {
-                self.status = format!("{e:#}");
+                self.file_error = Some(format!("{e:#}"));
             }
-            if ui.button("Reload file").clicked() {
-                match fs::read_to_string(self.root.join(&self.edit_file)) {
-                    Ok(text) => {
-                        self.saved = text.clone();
-                        self.edit = text;
-                    }
-                    Err(e) => self.status = e.to_string(),
-                }
+            if ui
+                .button(if dirty {
+                    "Discard edits"
+                } else {
+                    "Reload file"
+                })
+                .clicked()
+            {
+                self.open_file(self.edit_file.clone());
+            }
+            if dirty {
+                ui.label(muted("Unsaved changes"));
             }
         });
+        if let Some(e) = &self.file_error {
+            ui.colored_label(AMBER, e);
+        }
+        if self.file_unavailable {
+            return;
+        }
         egui::ScrollArea::both().show(ui, |ui| {
             ui.add(
                 egui::TextEdit::multiline(&mut self.edit)
+                    .id(egui::Id::new("workspace-file-content"))
                     .code_editor()
                     .desired_rows(32)
                     .desired_width(f32::INFINITY),
@@ -434,11 +480,11 @@ impl Desktop {
         });
     }
 }
-fn replace(path: &Path, text: &str) -> Result<()> {
+fn replace(path: &Path, bytes: &[u8]) -> Result<()> {
     let mut f = tempfile::NamedTempFile::new_in(path.parent().context("editor path")?)?;
     f.as_file()
         .set_permissions(fs::metadata(path)?.permissions())?;
-    f.write_all(text.as_bytes())?;
+    f.write_all(bytes)?;
     f.as_file().sync_all()?;
     f.persist(path)?;
     Ok(())
@@ -678,6 +724,97 @@ send = { directory = "freight-out" }
         Ok(())
     }
 
+    #[test]
+    #[ignore = "runs a local scripted HTTP exchange"]
+    fn search_filter_and_follow_exchange_links() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        crate::sample(dir.path())?;
+        let path = dir.path().join("vendredi.toml");
+        fs::write(
+            &path,
+            fs::read_to_string(&path)?.replace(":8180", ":0").replace(
+                "actions = [",
+                r#"actions = [{script="report.js",function="report"}, "#,
+            ),
+        )?;
+        fs::write(
+            dir.path().join("report.js"),
+            "function report(i,api){api.log('recorded');}",
+        )?;
+        let ctx = egui::Context::default();
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new("test screen size"), Vec2::new(1440., 860.)));
+        let mut app = Desktop::open(dir.path().into(), &ctx)?;
+        click(&mut app, &ctx, "Send sample order")?;
+        let end = Instant::now() + Duration::from_secs(8);
+        while !app.detail["events"]
+            .as_array()
+            .is_some_and(|events| events.iter().any(|e| e["event"] == "delivered"))
+        {
+            ensure!(Instant::now() < end, "scripted exchange timed out");
+            frame(&mut app, &ctx, vec![]);
+            thread::sleep(Duration::from_millis(10));
+        }
+        click(&mut app, &ctx, "Confirm orders")?;
+        assert!(app.view == View::Rules && app.rule_form.is_some());
+        click(&mut app, &ctx, "Cancel")?;
+        click(&mut app, &ctx, "All traffic")?;
+        click(&mut app, &ctx, "report.js")?;
+        assert!(app.view == View::Scripts && app.script_form.is_some());
+        frame(
+            &mut app,
+            &ctx,
+            vec![Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            }],
+        );
+        assert!(app.script_form.is_none());
+        click(&mut app, &ctx, "All traffic")?;
+        click(&mut app, &ctx, "Script log 1")?;
+        assert!(matches!(app.detail_tab, DetailTab::Log));
+        click(&mut app, &ctx, "Findings 0")?;
+        assert!(matches!(app.detail_tab, DetailTab::Findings));
+        click(&mut app, &ctx, "Status Any")?;
+        click(&mut app, &ctx, "Delivered")?;
+        assert!(
+            app.transfers
+                .values()
+                .filter(|r| app.visible(r))
+                .all(|r| r.outgoing)
+        );
+        click(&mut app, &ctx, "Search by reference, type or content")?;
+        frame(
+            &mut app,
+            &ctx,
+            vec![Event::Text("missing reference".into())],
+        );
+        click(&mut app, &ctx, "Clear filters")?;
+        assert!(app.search.is_empty() && app.filter_status == "Any" && app.direction == "Any");
+        click(&mut app, &ctx, "→  Send document…")?;
+        click(&mut app, &ctx, "JavaScript")?;
+        assert_eq!(app.send_file, "report.js");
+        assert_eq!(app.function, "report");
+        click(&mut app, &ctx, "Send")?;
+        assert!(!app.send_dialog);
+        drop(app);
+        let engine = vendredi_core::engine::Engine::open(
+            Workspace::load(dir.path())?,
+            Arc::new(vendredi_core::engine::SystemClock),
+        )?;
+        assert_eq!(
+            engine
+                .history(500)?
+                .iter()
+                .filter(|e| e["event"] == "script_log")
+                .count(),
+            2
+        );
+        Ok(())
+    }
+
     fn text_matches_reply(v: &Value) -> bool {
         v["raw"].as_str().is_some_and(|s| s.contains("ORDRSP"))
     }
@@ -744,11 +881,18 @@ send = { directory = "freight-out" }
             app.drain();
         }
         click(&mut app, &ctx, "Settings")?;
+        click(&mut app, &ctx, "Edit configuration file")?;
         // Drive the multiline editor with the same keyboard events as Select All and paste.
         let changed = app
             .edit
             .replace("message = \"ORDERS\"", "message = \"INVOIC\"");
-        let edit_pos = Pos2::new(300.0, 170.0);
+        frame(&mut app, &ctx, vec![]);
+        let edit_pos = ctx
+            .read_response(egui::Id::new("workspace-file-content"))
+            .context("configuration editor missing")?
+            .rect
+            .left_top()
+            + egui::vec2(24., 12.);
         frame(
             &mut app,
             &ctx,

@@ -20,14 +20,14 @@ pub(super) fn tables<'a>(parent: &'a mut Table, key: &str) -> Result<&'a mut Arr
 
 pub(super) struct FileEdit<'a> {
     pub path: &'a Path,
-    pub before: Option<&'a str>,
-    pub after: &'a str,
+    pub before: Option<&'a [u8]>,
+    pub after: &'a [u8],
 }
 impl FileEdit<'_> {
     fn verify(&self) -> Result<()> {
-        match fs::read_to_string(self.path) {
+        match fs::read(self.path) {
             Ok(text) => ensure!(
-                Some(text.as_str()) == self.before,
+                Some(text.as_slice()) == self.before,
                 "{} changed on disk. Reopen the workspace before saving.",
                 self.path.display()
             ),
@@ -43,7 +43,7 @@ impl FileEdit<'_> {
         let parent = self.path.parent().context("missing parent directory")?;
         fs::create_dir_all(parent)?;
         let mut f = tempfile::NamedTempFile::new_in(parent)?;
-        f.write_all(self.after.as_bytes())?;
+        f.write_all(self.after)?;
         f.as_file().sync_all()?;
         f.persist_noclobber(self.path)?;
         Ok(())
@@ -72,6 +72,7 @@ impl Desktop {
                     written.push(edit);
                 }
             }
+            let source = fs::read_to_string(self.root.join("vendredi.toml"))?;
             let workspace = Workspace::load(&self.root)?;
             self.running = runtime::start(
                 workspace.clone(),
@@ -79,6 +80,7 @@ impl Desktop {
                 false,
                 self.listening,
             )?;
+            self.config_source = source;
             self.workspace = workspace;
             self.partner = self.partner.min(self.workspace.partners.len() - 1);
             self.command(Command::Traffic(String::new()));
@@ -115,8 +117,8 @@ impl Desktop {
         let mut edits = Vec::from_iter(script);
         edits.push(FileEdit {
             path: &path,
-            before: Some(&before),
-            after: &config,
+            before: Some(before.as_bytes()),
+            after: config.as_bytes(),
         });
         self.apply_files(&edits)?;
         self.config_source = config;
