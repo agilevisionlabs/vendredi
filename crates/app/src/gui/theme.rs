@@ -128,13 +128,34 @@ pub(super) fn nav(ui: &mut Ui, text: &str, trailing: &str, selected: bool, count
     if selected {
         p.rect_filled(Rect::from_min_size(r.min, vec2(2., 34.)), 1, BLUE);
     }
-    p.text(
-        r.left_center() + vec2(10., 0.),
-        Align2::LEFT_CENTER,
-        text,
-        if selected { bold(13.) } else { font(13.) },
+    let face = if selected { bold(13.) } else { font(13.) };
+    let mut job = text::LayoutJob::simple_singleline(text.to_owned(), face, TEXT);
+    let reserved = if trailing.is_empty() {
+        20.
+    } else {
+        let tag_width = p
+            .layout_no_wrap(trailing.to_owned(), font(11.), MUTED)
+            .size()
+            .x;
+        30. + tag_width
+    };
+    job.wrap.max_width = (r.width() - reserved).max(1.);
+    job.wrap.max_rows = 1;
+    let galley = p.layout_job(job);
+    let truncated = galley.elided;
+    p.galley(
+        r.left_center() + vec2(10., -galley.size().y / 2.),
+        galley,
         TEXT,
     );
+    if res.has_focus() {
+        p.rect_stroke(
+            r.shrink(1.),
+            6,
+            Stroke::new(1_f32, BLUE),
+            StrokeKind::Inside,
+        );
+    }
     if !trailing.is_empty() {
         if count {
             let b = Rect::from_center_size(r.right_center() - vec2(19., 0.), vec2(22., 18.));
@@ -157,6 +178,11 @@ pub(super) fn nav(ui: &mut Ui, text: &str, trailing: &str, selected: bool, count
         }
     }
     res.widget_info(|| WidgetInfo::selected(WidgetType::SelectableLabel, true, selected, text));
+    let res = if truncated {
+        res.on_hover_text(text)
+    } else {
+        res
+    };
     res.on_hover_cursor(CursorIcon::PointingHand).clicked()
 }
 pub(super) fn area(ui: &mut Ui, r: Rect, id: &str) -> Ui {

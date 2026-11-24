@@ -113,7 +113,7 @@ impl Desktop {
         if !self.send_dialog {
             return;
         }
-        form::modal(
+        let escaped = form::modal(
             ctx,
             "send document",
             "Send document or script",
@@ -167,17 +167,6 @@ impl Desktop {
                         if self.send_script {
                             form::field(ui, "Entry function", &mut self.function);
                         }
-                        if self.root.join("order.edi").is_file()
-                            && ui
-                                .add_enabled(self.listening, egui::Link::new("Send sample order"))
-                                .on_hover_text("Submit order.edi to the selected partner’s intake")
-                                .clicked()
-                        {
-                            match self.sample(self.send_partner) {
-                                Ok(()) => self.send_dialog = false,
-                                Err(e) => self.send_error = format!("{e:#}"),
-                            }
-                        }
                     });
                 if !self.listening {
                     ui.label(muted("Start the listener to send traffic."));
@@ -202,8 +191,24 @@ impl Desktop {
                     if button(ui, "Cancel", false).clicked() {
                         self.send_dialog = false;
                     }
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        if self.root.join("order.edi").is_file()
+                            && ui
+                                .add_enabled(self.listening, egui::Link::new("Send sample order"))
+                                .on_hover_text("Submit order.edi to the selected partner’s intake")
+                                .clicked()
+                        {
+                            match self.sample(self.send_partner) {
+                                Ok(()) => self.send_dialog = false,
+                                Err(e) => self.send_error = format!("{e:#}"),
+                            }
+                        }
+                    });
                 });
             },
         );
+        if escaped {
+            self.send_dialog = false;
+        }
     }
 }

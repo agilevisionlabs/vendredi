@@ -110,7 +110,10 @@ impl Desktop {
                         .iter()
                         .filter(|e| e["event"] == "script_log" && e["execution"] == v["execution"])
                         .count();
-                    ("Script ran".into(), format!("{logs} log lines"))
+                    (
+                        "Script ran".into(),
+                        format!("{logs} log line{}", if logs == 1 { "" } else { "s" }),
+                    )
                 }
                 "acknowledged" => ("Acknowledgement received".into(), text(v, "status").into()),
                 "failed" => ("Delivery failed".into(), text(v, "detail").into()),
@@ -126,7 +129,7 @@ impl Desktop {
         }
         steps
     }
-    pub(super) fn inspector(&mut self, ui: &mut Ui) {
+    pub(super) fn inspector(&mut self, ui: &mut Ui, compact: bool) {
         let Some(row) = self
             .selected
             .and_then(|id| self.transfers.get(&id))
@@ -187,75 +190,96 @@ impl Desktop {
             .rect;
         line(ui, header.left_bottom(), header.right_bottom());
         let steps = self.steps(&row);
-        let height = (42. + 26. * steps.len() as f32).min((r.height() * 0.36).max(62.));
+        let expanded = !compact || self.expand_timeline;
+        let height = if expanded {
+            (42. + 26. * steps.len() as f32).min((r.height() * 0.36).max(62.))
+        } else {
+            34.
+        };
         let timeline = Rect::from_min_size(header.left_bottom(), vec2(r.width(), height));
         let mut timeline_ui = area(ui, timeline.shrink2(vec2(16., 9.)), "timeline");
-        section(&mut timeline_ui, "WHAT HAPPENED");
-        timeline_ui.add_space(6.);
-        ScrollArea::vertical()
-            .id_salt("steps")
-            .show(&mut timeline_ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 0.;
-                for (i, step) in steps.iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        ui.set_min_height(26.);
-                        ui.spacing_mut().item_spacing.x = 8.;
-                        ui.add_sized([60., 22.], Label::new(muted(time(step.at)).monospace()));
-                        let (marker, _) = ui.allocate_exact_size(vec2(9., 26.), Sense::hover());
-                        let c = marker.center();
-                        if i > 0 {
-                            line(ui, marker.center_top(), c);
-                        }
-                        if i + 1 < steps.len() {
-                            line(ui, c, marker.center_bottom());
-                        }
-                        let last = i + 1 == steps.len();
-                        ui.painter().circle(
-                            c,
-                            3.7,
-                            if last { BLUE } else { BG },
-                            Stroke::new(1.0_f32, if last { BLUE } else { EDGE }),
-                        );
-                        ui.label(RichText::new(&step.title).font(bold(13.)));
-                        if !step.note.is_empty() {
-                            ui.label(RichText::new(&step.note).size(12.).color(SECONDARY_TEXT));
-                        }
-                        if let Some(link) = &step.link {
-                            let label = match link {
-                                Link::Transfer(_, s) | Link::Rule(s) => s.clone(),
-                                Link::Script(p, _) => p.display().to_string(),
-                            };
-                            if ui
-                                .link(
-                                    RichText::new(label)
-                                        .monospace()
-                                        .size(12.)
-                                        .color(BLUE)
-                                        .underline(),
-                                )
-                                .clicked()
-                            {
-                                match link {
-                                    Link::Transfer(id, _) => {
-                                        if self.transfers.get(id).is_some_and(|r| !self.visible(r))
-                                        {
-                                            self.view = View::All;
-                                            self.search.clear();
-                                            self.direction = "Any".into();
-                                            self.filter_status = "Any".into();
+        if compact {
+            let label = if self.expand_timeline {
+                "Hide timeline"
+            } else {
+                "Show timeline"
+            };
+            if timeline_ui.link(label).clicked() {
+                self.expand_timeline = !self.expand_timeline;
+            }
+        } else {
+            section(&mut timeline_ui, "WHAT HAPPENED");
+        }
+        if expanded {
+            timeline_ui.add_space(6.);
+            ScrollArea::vertical()
+                .id_salt("steps")
+                .show(&mut timeline_ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 0.;
+                    for (i, step) in steps.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            ui.set_min_height(26.);
+                            ui.spacing_mut().item_spacing.x = 8.;
+                            ui.add_sized([60., 22.], Label::new(muted(time(step.at)).monospace()));
+                            let (marker, _) = ui.allocate_exact_size(vec2(9., 26.), Sense::hover());
+                            let c = marker.center();
+                            if i > 0 {
+                                line(ui, marker.center_top(), c);
+                            }
+                            if i + 1 < steps.len() {
+                                line(ui, c, marker.center_bottom());
+                            }
+                            let last = i + 1 == steps.len();
+                            ui.painter().circle(
+                                c,
+                                3.7,
+                                if last { BLUE } else { BG },
+                                Stroke::new(1.0_f32, if last { BLUE } else { EDGE }),
+                            );
+                            ui.label(RichText::new(&step.title).font(bold(13.)));
+                            if !step.note.is_empty() {
+                                ui.label(RichText::new(&step.note).size(12.).color(SECONDARY_TEXT));
+                            }
+                            if let Some(link) = &step.link {
+                                let label = match link {
+                                    Link::Transfer(_, s) | Link::Rule(s) => s.clone(),
+                                    Link::Script(p, _) => p.display().to_string(),
+                                };
+                                if ui
+                                    .link(
+                                        RichText::new(label)
+                                            .monospace()
+                                            .size(12.)
+                                            .color(BLUE)
+                                            .underline(),
+                                    )
+                                    .clicked()
+                                {
+                                    match link {
+                                        Link::Transfer(id, _) => {
+                                            if self
+                                                .transfers
+                                                .get(id)
+                                                .is_some_and(|r| !self.visible(r))
+                                            {
+                                                self.view = View::All;
+                                                self.search.clear();
+                                                self.direction = "Any".into();
+                                                self.filter_status = "Any".into();
+                                            }
+                                            self.select(*id);
                                         }
-                                        self.select(*id);
-                                    }
-                                    Link::Rule(name) => self.edit_rule_link(&row.partner, name),
-                                    Link::Script(p, rule) => {
-                                        self.edit_script_link(p, &row.partner, rule.as_deref());
+                                        Link::Rule(name) => self.edit_rule_link(&row.partner, name),
+                                        Link::Script(p, rule) => {
+                                            self.edit_script_link(p, &row.partner, rule.as_deref());
+                                        }
                                     }
                                 }
                             }
-                        }
-                    });
-                }
-            });
+                        });
+                    }
+                });
+        }
         let tabs = Rect::from_min_size(timeline.left_bottom(), vec2(r.width(), 40.));
         ui.painter().rect_filled(tabs, 0, PANEL);
         line(ui, tabs.left_top(), tabs.right_top());
@@ -451,11 +475,11 @@ impl Desktop {
                 .show(&mut strip, |ui| {
                     ui.horizontal_centered(|ui| {
                         ui.label(
-                            RichText::new(format!(
-                                "Segment {} · {}",
-                                self.segment + 1,
-                                text(seg, "tag")
-                            ))
+                            RichText::new(if text(seg, "tag").is_empty() {
+                                format!("Segment {}", self.segment + 1)
+                            } else {
+                                format!("Segment {} · {}", self.segment + 1, text(seg, "tag"))
+                            })
                             .strong()
                             .size(12.),
                         );

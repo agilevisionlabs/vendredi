@@ -352,7 +352,7 @@ impl Desktop {
             return;
         };
         let mut close = false;
-        form::modal(ctx, "remove partner", "Remove partner?", 400., |ui| {
+        let escaped = form::modal(ctx, "remove partner", "Remove partner?", 400., |ui| {
             let name = &self.workspace.partners[removal.index].name;
             ui.label(format!("Remove {name} and its rules from this workspace?"));
             if !removal.error.is_empty() {
@@ -368,7 +368,7 @@ impl Desktop {
                 close |= button(ui, "Cancel", false).clicked();
             });
         });
-        if !close {
+        if !close && !escaped {
             self.partner_removal = Some(removal);
         }
     }
@@ -391,7 +391,7 @@ impl Desktop {
         } else {
             "Add partner"
         };
-        form::modal(ctx, "partner editor", title, 560., |ui| {
+        let escaped = form::modal(ctx, "partner editor", title, 560., |ui| {
             ScrollArea::vertical()
                 .max_height((ctx.content_rect().height() - 220.).max(100.))
                 .show(ui, |ui| form.fields(ui, &self.workspace));
@@ -419,7 +419,7 @@ impl Desktop {
                 }
             });
         });
-        if !close {
+        if !close && !escaped {
             self.partner_form = Some(form);
         }
     }

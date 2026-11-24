@@ -209,13 +209,17 @@ impl Desktop {
                         if ui.button("‹  Back to traffic").clicked() {
                             self.compact_detail = false;
                         }
-                        let height = ui.available_height().max(440.);
+                        let height = ui.available_height().max(if self.expand_timeline {
+                            440.
+                        } else {
+                            310.
+                        });
                         ScrollArea::vertical()
                             .id_salt("compact-inspection")
                             .show(ui, |ui| {
                                 let size = vec2(ui.available_width(), height);
                                 let (_, rect) = ui.allocate_space(size);
-                                self.inspector(&mut area(ui, rect, "compact-inspector"));
+                                self.inspector(&mut area(ui, rect, "compact-inspector"), true);
                             });
                     } else {
                         self.table(&mut area(ui, r, "compact-table"), true);
@@ -242,7 +246,7 @@ impl Desktop {
                 }
                 self.table(&mut area(ui, list, "list"), false);
                 self.reconcile_selection();
-                self.inspector(&mut area(ui, inspect, "inspector"));
+                self.inspector(&mut area(ui, inspect, "inspector"), false);
             });
         self.dialogs(ctx);
     }

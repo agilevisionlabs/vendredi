@@ -337,7 +337,7 @@ impl Desktop {
         } else {
             "Add rule"
         };
-        form::modal(ctx, "rule editor", title, 510., |ui| {
+        let escaped = form::modal(ctx, "rule editor", title, 510., |ui| {
             if f.removing {
                 ui.label(format!(
                     "Remove {} from {}?",
@@ -388,7 +388,7 @@ impl Desktop {
                 }
             });
         });
-        if !close {
+        if !close && !escaped {
             self.rule_form = Some(f);
         }
     }

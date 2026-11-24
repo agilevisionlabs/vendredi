@@ -22,7 +22,7 @@ impl Desktop {
             return;
         };
         let mut close = false;
-        form::modal(ctx, "clear history", "Clear traffic history?", 440., |ui| {
+        let escaped = form::modal(ctx, "clear history", "Clear traffic history?", 440., |ui| {
             form::label(ui, "Partner");
             let current: BTreeSet<_> = self
                 .workspace
@@ -72,7 +72,7 @@ impl Desktop {
                 close |= button(ui, "Cancel", false).clicked();
             });
         });
-        if !close {
+        if !close && !escaped {
             self.cleanup = Some(cleanup);
         }
     }

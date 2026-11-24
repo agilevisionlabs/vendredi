@@ -7,8 +7,8 @@ pub(super) fn modal(
     title: &str,
     width: f32,
     contents: impl FnOnce(&mut Ui),
-) {
-    Modal::new(id.into())
+) -> bool {
+    let response = Modal::new(id.into())
         .backdrop_color(Color32::from_rgba_unmultiplied(17, 32, 52, 82))
         .frame(
             Frame::popup(&ctx.style())
@@ -29,6 +29,9 @@ pub(super) fn modal(
             ui.add_space(4.);
             contents(ui);
         });
+    response.is_top_modal
+        && !response.any_popup_open
+        && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
 }
 
 pub(super) fn label(ui: &mut Ui, text: &str) -> Response {
