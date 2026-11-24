@@ -1,0 +1,21 @@
+[workspace]
+resolver = "3"
+members = ["crates/core", "crates/transports", "crates/app"]
+default-members = ["crates/app"]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "AGPL-3.0-only"
+
+[workspace.dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+vendredi-core = { path = "crates/core" }
+vendredi-transports = { path = "crates/transports" }
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+strip = true

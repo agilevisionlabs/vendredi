@@ -1,0 +1,12 @@
+[package]
+name = "vendredi-transports"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+vendredi-core.workspace = true
+tiny_http = "0.12"
+ureq = { version = "2.12", default-features = false }
+notify = "8"

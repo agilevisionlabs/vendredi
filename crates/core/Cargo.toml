@@ -1,0 +1,18 @@
+[package]
+name = "vendredi-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+boa_engine = { version = "0.21", default-features = false }
+turso = { version = "0", default-features = false }
+tokio = { version = "1", features = ["rt", "time"] }
+toml = "0.9"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[dev-dependencies]
+tempfile = "3"
