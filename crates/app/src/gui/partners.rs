@@ -10,7 +10,6 @@ pub(super) struct PartnerForm {
     partner: Partner,
     headers: Vec<(String, String)>,
     error: String,
-    confirm_remove: bool,
     alternate_reply: Option<SendChannel>,
     focus_name: bool,
 }
@@ -43,20 +42,14 @@ impl PartnerForm {
             partner,
             headers,
             error: String::new(),
-            confirm_remove: false,
             alternate_reply: None,
             focus_name: index.is_none(),
         }
     }
 
-    fn configuration(&mut self, app: &Desktop, remove: bool) -> Result<String> {
+    fn configuration(&mut self, app: &Desktop) -> Result<String> {
         let mut doc: DocumentMut = app.config_source.parse()?;
         let list = tables(doc.as_table_mut(), "partners")?;
-        if remove {
-            ensure!(list.len() > 1, "The workspace needs at least one partner.");
-            list.remove(self.index.context("select a partner")?);
-            return Ok(doc.to_string());
-        }
         let p = &mut self.partner;
         ensure!(!p.name.trim().is_empty(), "Enter a partner name.");
         ensure!(
@@ -329,7 +322,62 @@ fn resolved_path(ui: &mut Ui, path: &Path, root: &Path) {
     }
 }
 
+pub(super) fn removal_button(label: &str) -> egui::Button<'_> {
+    egui::Button::new(RichText::new(label).color(egui::Color32::WHITE))
+        .fill(egui::Color32::from_rgb(173, 40, 42))
+}
+
+pub(super) struct PartnerRemoval {
+    index: usize,
+    error: String,
+}
+impl PartnerRemoval {
+    pub(super) fn new(index: usize) -> Self {
+        Self {
+            index,
+            error: String::new(),
+        }
+    }
+}
+
 impl Desktop {
+    fn remove_partner(&mut self, index: usize) -> Result<()> {
+        let mut doc: DocumentMut = self.config_source.parse()?;
+        let list = tables(doc.as_table_mut(), "partners")?;
+        ensure!(list.len() > 1, "The workspace needs at least one partner.");
+        list.remove(index);
+        self.save_configuration(doc.to_string(), None)?;
+        self.navigate(View::All);
+        self.status = "Partner removed".into();
+        Ok(())
+    }
+
+    pub(super) fn partner_removal_dialog(&mut self, ctx: &egui::Context) {
+        let Some(mut removal) = self.partner_removal.take() else {
+            return;
+        };
+        let mut close = false;
+        form::modal(ctx, "remove partner", "Remove partner?", 400., |ui| {
+            let name = &self.workspace.partners[removal.index].name;
+            ui.label(format!("Remove {name} and its rules from this workspace?"));
+            if !removal.error.is_empty() {
+                ui.colored_label(AMBER, &removal.error);
+            }
+            form::footer(ui, |ui| {
+                if ui.add(removal_button("Confirm removal")).clicked() {
+                    match self.remove_partner(removal.index) {
+                        Ok(()) => close = true,
+                        Err(e) => removal.error = format!("{e:#}"),
+                    }
+                }
+                close |= button(ui, "Cancel", false).clicked();
+            });
+        });
+        if !close {
+            self.partner_removal = Some(removal);
+        }
+    }
+
     pub(super) fn open_partner(&mut self, index: Option<usize>) {
         if self.edit != self.saved {
             self.status = "Save or reload your current edits before opening a partner.".into();
@@ -355,27 +403,17 @@ impl Desktop {
             if !form.error.is_empty() {
                 ui.colored_label(AMBER, &form.error);
             }
-            if form.confirm_remove {
-                ui.label("Remove this partner and its rules from the workspace?");
-            }
             form::footer(ui, |ui| {
-                let remove = form.confirm_remove && ui.button("Confirm removal").clicked();
-                let save = !form.confirm_remove && button(ui, "Save partner", true).clicked();
-                if save || remove {
+                if button(ui, "Save partner", true).clicked() {
                     match form
-                        .configuration(self, remove)
+                        .configuration(self)
                         .and_then(|doc| self.save_configuration(doc, None))
                     {
                         Ok(()) => {
-                            if remove {
-                                self.navigate(View::All);
-                                self.status = "Partner removed".into();
-                            } else {
-                                let i = form.index.unwrap_or(self.workspace.partners.len() - 1);
-                                self.partner = i;
-                                self.navigate(View::Partner(i));
-                                self.status = "Partner saved".into();
-                            }
+                            let i = form.index.unwrap_or(self.workspace.partners.len() - 1);
+                            self.partner = i;
+                            self.navigate(View::Partner(i));
+                            self.status = "Partner saved".into();
                             close = true;
                         }
                         Err(e) => form.error = format!("{e:#}"),
@@ -383,18 +421,6 @@ impl Desktop {
                 }
                 if button(ui, "Cancel", false).clicked() {
                     close = true;
-                }
-                if !form.confirm_remove
-                    && form.index.is_some()
-                    && self.workspace.partners.len() > 1
-                    && ui
-                        .with_layout(Layout::left_to_right(Align::Center), |ui| {
-                            ui.link("Remove partner")
-                        })
-                        .inner
-                        .clicked()
-                {
-                    form.confirm_remove = true;
                 }
             });
         });
@@ -469,6 +495,19 @@ mod tests {
         assert_eq!(w.partners[0].name, "Supplier East");
         assert_eq!(w.partners[0].rules[0].name, "Confirm orders");
         assert!(fs::read_to_string(&config)?.starts_with("# keep this comment"));
+        click(&mut app, &ctx, "Remove partner")?;
+        assert!(app.partner_form.is_none());
+        assert!(app.partner_removal.is_some());
+        click(&mut app, &ctx, "Cancel")?;
+        assert_eq!(Workspace::load(dir.path())?.partners.len(), 2);
+        click(&mut app, &ctx, "Remove partner")?;
+        click(&mut app, &ctx, "Confirm removal")?;
+        let w = Workspace::load(dir.path())?;
+        assert_eq!(w.partners.len(), 1);
+        assert_eq!(w.partners[0].name, "North Freight");
+        click(&mut app, &ctx, "North Freight")?;
+        click(&mut app, &ctx, "Remove partner")?;
+        assert!(app.partner_removal.is_none());
         Ok(())
     }
 }

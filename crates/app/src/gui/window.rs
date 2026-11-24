@@ -173,10 +173,18 @@ impl Desktop {
                 }
                 if let View::Partner(i) = self.view {
                     Frame::new().inner_margin(12).show(ui, |ui| {
-                        ui.horizontal(|ui| {
+                        ui.horizontal_wrapped(|ui| {
                             ui.heading(&self.workspace.partners[i].name);
                             if ui.button("Edit partner").clicked() {
                                 self.open_partner(Some(i));
+                            }
+                            let can_remove = self.workspace.partners.len() > 1;
+                            if ui
+                                .add_enabled(can_remove, partners::removal_button("Remove partner"))
+                                .on_disabled_hover_text("The workspace needs at least one partner.")
+                                .clicked()
+                            {
+                                self.partner_removal = Some(partners::PartnerRemoval::new(i));
                             }
                         });
                     });
@@ -440,6 +448,7 @@ impl Desktop {
             self.send_dialog &= open;
         }
         self.partner_dialog(ctx);
+        self.partner_removal_dialog(ctx);
         self.script_dialog(ctx);
     }
 }
