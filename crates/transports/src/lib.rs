@@ -65,9 +65,10 @@ pub fn listen(w: &Workspace, ingest: Ingest) -> Result<Listeners> {
     let wake_notify = wake.clone();
     let mut watcher =
         notify::recommended_watcher(move |event: notify::Result<notify::Event>| match event {
-            Ok(_) => {
+            Ok(event) if !matches!(event.kind, notify::EventKind::Access(_)) => {
                 let _ = wake_notify.send(());
             }
+            Ok(_) => {}
             Err(e) => eprintln!("folder watcher: {e}"),
         })?;
     for (_, dir, _) in &folders {

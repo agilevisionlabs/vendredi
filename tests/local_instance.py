@@ -153,6 +153,20 @@ class LocalExchange(unittest.TestCase):
         self.assertEqual(len(files), 1)
         self.assertIn(b"UCI+ORDER42+BUYER:ZZ+SUPPLIER:ZZ+4'", files[0].read_bytes())
 
+    def test_envelope_faults_and_duplicate_delivery(self):
+        self.config = self.config.replace('url = "http://127.0.0.1:8181/replies"', 'directory = "out"')
+        actions = '{ fault = "duplicate_reference" }, { fault = "wrong_count" }, { fault = "duplicate" }, { document = "confirmation.edi" }'
+        self.config = self.config.replace('{ document = "confirmation.edi" }', actions)
+        app = self.launch()
+        self.assertEqual(self.post(self.order), (202, b""))
+        for _ in range(3):
+            app.wait("delivered")
+        app.close()
+        replies = [p.read_bytes() for p in sorted((self.root / "out").glob("*.edi"))]
+        self.assertEqual(replies[1], replies[2])
+        self.assertTrue(replies[1].endswith(b"UNZ+0+1'"))
+        self.assertTrue(replies[0].endswith(b"UNZ+1+1'"))
+
     def test_folder_delivery_failure_can_be_resent(self):
         self.config = self.config.replace('url = "http://127.0.0.1:8181/replies"', 'directory = "out"')
         app = self.launch()
