@@ -4,7 +4,7 @@ An EDI simulator for developers: a fake trading partner that runs on your machin
 
 ## Run an exchange
 
-Open the `vendredi` executable. On first launch it creates a sample workspace in the user's home directory under `Vendredi`. Choose **Send sample order**. Select the inbound transfer or either reply to inspect its raw bytes, validation findings and execution history. The sample supplier writes a `CONTRL` and an `ORDRSP` into the workspace’s `replies` folder.
+Open the `vendredi` executable. On first launch it creates a sample workspace in the user's home directory under `Vendredi`. Choose **Send sample order** in the empty traffic list or from **Send document…**. Select the inbound transfer or either reply to inspect its raw bytes, validation findings and execution history. The sample supplier writes a `CONTRL` and an `ORDRSP` into the workspace’s `replies` folder.
 
 To run the sample headless, initialize a workspace and start its listener.
 
@@ -23,7 +23,7 @@ The listener returns HTTP 202 after recording the inbound bytes. Replies use the
 
 ## Workspaces and commands
 
-- Edit `vendredi.toml` and its referenced documents and scripts on disk or in the **Workspace** tab. Each partner has ordered rules, one or more receive channels and one send channel. The first matching rule runs. The sample supports UN/EDIFACT syntax version 3, independent of the message directory release.
+- Edit `vendredi.toml` and its referenced documents and scripts on disk or through **Rules**, **Scripts**, **Documents** and **Settings** in the sidebar. Each partner has ordered rules, one or more receive channels and one send channel. The first matching rule runs. The sample supports UN/EDIFACT syntax version 3, independent of the message directory release.
 - To submit a file through a folder channel, write it under a temporary name in the same directory, close it, and rename it to the configured suffix (e.g. `.edi`). The suffix signals that the file is complete. Vendredi claims and removes it after recording. Each outgoing file is published under its transfer ID.
 - A running headless instance accepts `send Supplier confirmation.edi`, `send Supplier script.js functionName`, `inspect 1`, `resend 2`, and `quit` on standard input. Use a JSON array of strings for arguments containing spaces. With the workspace closed, run `vendredi send ./demo Supplier confirmation.edi`, `vendredi inspect ./demo 1` or `vendredi resend ./demo 2`. One engine owns the workspace at a time.
 - `vendredi gui ./demo` opens the same configuration and traffic history. Embedded Turso stores exact bytes, delivery attempts, findings, per-partner counters and script state in `.vendredi/vendredi.db`. History retention runs when the workspace opens. Failed or interrupted deliveries are available for explicit resend.

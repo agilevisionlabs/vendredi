@@ -21,6 +21,9 @@ pub enum Command {
     Send(String, PathBuf, Option<String>),
     Resend(i64),
     Inspect(i64),
+    Traffic(String),
+    Listen(bool),
+    Replay(i64),
     Stop,
 }
 pub type Output = Arc<dyn Fn(Value) + Send + Sync>;
@@ -55,23 +58,21 @@ pub fn start(w: Workspace, out: Output, with_history: bool, listen: bool) -> Res
     let delivered = tx.clone();
     let root = w.root.clone();
     let handle = thread::spawn(move || {
+        let ingest: transport::Ingest = Arc::new(move |i| {
+            input
+                .send(Command::Receive(i))
+                .map_err(|_| anyhow!("engine stopped"))
+        });
         let setup = (|| -> Result<_> {
             let e = Engine::open(w, Arc::new(SystemClock))?;
             let listeners = if listen {
-                Some(transport::listen(
-                    &e.workspace,
-                    Arc::new(move |i| {
-                        input
-                            .send(Command::Receive(i))
-                            .map_err(|_| anyhow!("engine stopped"))
-                    }),
-                )?)
+                Some(transport::listen(&e.workspace, ingest.clone())?)
             } else {
                 None
             };
             Ok((e, listeners))
         })();
-        let (mut e, _listeners) = match setup {
+        let (mut e, mut listeners) = match setup {
             Ok(v) => v,
             Err(err) => {
                 let _ = ready.send(Err(format!("{err:#}")));
@@ -88,6 +89,16 @@ pub fn start(w: Workspace, out: Output, with_history: bool, listen: bool) -> Res
             }
         });
         if with_history {
+            let rows = e.traffic("")?;
+            let focus = rows
+                .iter()
+                .find(|r| !r.outgoing)
+                .or_else(|| rows.first())
+                .map(|r| r.id);
+            out(json!({"event":"traffic","search":"","rows":rows}));
+            if let Some(id) = focus {
+                out(json!({"event":"detail","value":e.detail(id)?}));
+            }
             for v in e.history(500)? {
                 out(v);
             }
@@ -115,6 +126,22 @@ pub fn start(w: Workspace, out: Output, with_history: bool, listen: bool) -> Res
                 }
                 Some(Command::Send(p, path, f)) => e.initiate(&p, &path, f.as_deref()),
                 Some(Command::Resend(id)) => e.resend(id),
+                Some(Command::Replay(id)) => e.replay(id),
+                Some(Command::Traffic(search)) => e
+                    .traffic(&search)
+                    .map(|rows| out(json!({"event":"traffic","search":search,"rows":rows}))),
+                Some(Command::Listen(enable)) => {
+                    let result = if enable && listeners.is_none() {
+                        transport::listen(&e.workspace, ingest.clone()).map(|l| listeners = Some(l))
+                    } else {
+                        if !enable {
+                            listeners.take();
+                        }
+                        Ok(())
+                    };
+                    out(json!({"event":"listening","active":listeners.is_some()}));
+                    result
+                }
                 Some(Command::Inspect(id)) => e
                     .detail(id)
                     .map(|v| out(json!({"event":"detail","value":v}))),
