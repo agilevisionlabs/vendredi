@@ -2,6 +2,7 @@ mod form;
 mod history;
 mod inspector;
 mod partners;
+mod rules;
 mod scripts;
 mod send;
 mod theme;
@@ -85,6 +86,7 @@ struct Desktop {
     partner_removal: Option<partners::PartnerRemoval>,
     cleanup: Option<history::Cleanup>,
     script_form: Option<scripts::ScriptForm>,
+    rule_form: Option<rules::RuleForm>,
     partner: usize,
     send_file: String,
     function: String,
@@ -144,6 +146,7 @@ impl Desktop {
             partner_removal: None,
             cleanup: None,
             script_form: None,
+            rule_form: None,
             partner: 0,
             send_file: String::new(),
             function: String::new(),
@@ -294,7 +297,7 @@ impl Desktop {
         }
         self.compact_detail = false;
         self.view = view;
-        if matches!(self.view, View::Rules | View::Documents | View::Settings)
+        if matches!(self.view, View::Documents | View::Settings)
             && let Some(path) = self.files().first()
         {
             self.open_file(path.clone());
@@ -329,7 +332,6 @@ impl Desktop {
     fn editor(&mut self, ui: &mut egui::Ui) {
         let title = match self.view {
             View::Documents => "Documents",
-            View::Rules => "Rules",
             _ => "Settings",
         };
         ui.heading(title);

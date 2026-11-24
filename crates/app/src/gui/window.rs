@@ -170,6 +170,10 @@ impl Desktop {
         CentralPanel::default()
             .frame(Frame::new().fill(BG))
             .show(ctx, |ui| {
+                if self.view == View::Rules {
+                    Frame::new().inner_margin(16).show(ui, |ui| self.rules(ui));
+                    return;
+                }
                 if self.view == View::Scripts {
                     Frame::new()
                         .inner_margin(16)
@@ -445,5 +449,6 @@ impl Desktop {
         self.partner_dialog(ctx);
         self.partner_removal_dialog(ctx);
         self.script_dialog(ctx);
+        self.rule_dialog(ctx);
     }
 }

@@ -246,7 +246,7 @@ impl Desktop {
                                         }
                                         self.select(*id);
                                     }
-                                    Link::Rule(_) => self.navigate(View::Rules),
+                                    Link::Rule(name) => self.edit_rule_link(&row.partner, name),
                                     Link::Script(p, rule) => {
                                         self.edit_script_link(p, &row.partner, rule.as_deref());
                                     }
