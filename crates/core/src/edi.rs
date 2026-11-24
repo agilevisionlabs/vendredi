@@ -350,6 +350,46 @@ pub fn parse(raw: &[u8]) -> Parsed {
     out
 }
 
+/// Keep the wire spelling for display and the decoded components for inspection.
+pub fn lines(raw: &[u8]) -> Vec<serde_json::Value> {
+    let mut pos = 0;
+    let mut syntax = Syntax::default();
+    let mut lines = Vec::new();
+    while pos < raw.len() {
+        skip_lines(raw, &mut pos);
+        if pos == raw.len() {
+            break;
+        }
+        let start = pos;
+        if raw[pos..].starts_with(b"UNA")
+            && let Some(advice) = raw.get(pos + 3..pos + 9)
+        {
+            let supplied = Syntax(advice.try_into().unwrap());
+            if supplied.validate().is_ok() {
+                syntax = supplied;
+                pos += 9;
+                lines.push(serde_json::json!({"tag":"UNA","raw":latin1(&raw[start..pos]),"elements":[[latin1(advice)]]}));
+                continue;
+            }
+        }
+        let decoded = segment(raw, &mut pos, syntax);
+        let (tag, elements) = match decoded {
+            Ok(s) => (s.tag, s.elements),
+            Err(_) => (String::new(), Vec::new()),
+        };
+        if tag == "UNZ" {
+            syntax = Syntax::default();
+        }
+        lines.push(
+            serde_json::json!({"tag":tag,"raw":latin1(&raw[start..pos]),"elements":elements}),
+        );
+    }
+    lines
+}
+pub fn latin1(bytes: &[u8]) -> String {
+    bytes.iter().copied().map(char::from).collect()
+}
+
 pub fn document(raw: &[u8]) -> Result<Message> {
     let mut pos = 0;
     let mut segments = Vec::new();

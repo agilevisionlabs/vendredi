@@ -47,6 +47,20 @@ struct Task {
     actions: VecDeque<Action>,
     faults: Vec<Fault>,
 }
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct TrafficRow {
+    pub id: i64,
+    pub root: i64,
+    pub time: i64,
+    pub outgoing: bool,
+    pub partner: String,
+    pub kind: String,
+    pub reference: String,
+    pub version: String,
+    pub status: String,
+    pub attention: bool,
+}
+
 pub struct Engine {
     pub workspace: Workspace,
     store: Store,
@@ -136,6 +150,67 @@ impl Engine {
         self.store.query("SELECT body FROM (SELECT id,body FROM events ORDER BY id DESC LIMIT ?) ORDER BY id",[limit])?.iter()
         .map(|r|Ok(serde_json::from_str(&r.get::<String>(0)?)?)).collect()
     }
+    pub fn traffic(&self, search: &str) -> Result<Vec<TrafficRow>> {
+        self.store
+            .query(include_str!("traffic.sql"), [search])?
+            .iter()
+            .map(|r| {
+                let outgoing = r.get::<String>(3)? == "out";
+                let delivery = r.get::<String>(5)?;
+                let findings = r.get::<i64>(9)?;
+                let (status, attention) = match delivery.as_str() {
+                    "failed" => ("Delivery failed".into(), true),
+                    "interrupted" => ("Interrupted".into(), true),
+                    "pending" => ("Pending".into(), false),
+                    _ if findings > 0 => (
+                        format!(
+                            "Rejected · {findings} finding{}",
+                            if findings == 1 { "" } else { "s" }
+                        ),
+                        true,
+                    ),
+                    _ if r.get::<i64>(12)? != 0 || r.get::<i64>(13)? != 0 => {
+                        ("Rejected".into(), true)
+                    }
+                    _ if r.get::<i64>(11)? != 0 => ("Action failed".into(), true),
+                    _ if r.get::<i64>(10)? != 0 => ("No rule matched".into(), true),
+                    _ if outgoing && r.get::<i64>(14)? != 0 => ("Acknowledged".into(), false),
+                    _ if outgoing && r.get::<i64>(15)? != 0 => {
+                        ("Awaiting acknowledgement".into(), false)
+                    }
+                    _ if outgoing => ("Delivered".into(), false),
+                    _ => ("Accepted".into(), false),
+                };
+                Ok(TrafficRow {
+                    id: r.get(0)?,
+                    root: r.get(1)?,
+                    time: r.get(2)?,
+                    outgoing,
+                    partner: r.get(4)?,
+                    kind: r.get(6)?,
+                    reference: r.get(7)?,
+                    version: r.get(8)?,
+                    status,
+                    attention,
+                })
+            })
+            .collect()
+    }
+    pub fn replay(&mut self, id: i64) -> Result<()> {
+        let rows = self.store.query(
+            "SELECT partner,bytes,metadata FROM transfers WHERE id=? AND direction='in'",
+            [id],
+        )?;
+        let row = rows.first().context("inbound transfer not found")?;
+        let p = self.partner(&row.get::<String>(0)?)?;
+        let bytes = row.get::<Vec<u8>>(1)?;
+        let mut metadata: Value = serde_json::from_str(&row.get::<String>(2)?)?;
+        metadata["replay_of"] = json!(id);
+        let replay = self
+            .receive(p, &bytes, metadata, None)?
+            .context("replay not recorded")?;
+        self.process(p, replay, edi::parse(&bytes))
+    }
     pub fn detail(&self, id: i64) -> Result<Value> {
         let rows = self.store.query(
             "SELECT bytes,metadata,status,root FROM transfers WHERE id=?",
@@ -169,8 +244,10 @@ impl Engine {
                 )
             })
             .collect::<Result<Vec<_>>>()?;
+        let findings=self.store.query("SELECT severity,code,offset,text FROM findings WHERE transfer=? ORDER BY offset,id",[id])?
+            .iter().map(|r|Ok(json!({"severity":r.get::<String>(0)?,"code":r.get::<String>(1)?,"offset":r.get::<i64>(2)?,"text":r.get::<String>(3)?}))).collect::<Result<Vec<_>>>()?;
         Ok(
-            json!({"transfer":id,"interchanges":summaries,"status":r.get::<String>(2)?,"metadata":r.get::<String>(1)?,"bytes":bytes,"raw":String::from_utf8_lossy(&bytes),"parsed":edi::parse(&bytes),"events":events}),
+            json!({"transfer":id,"segments":edi::lines(&bytes),"findings":findings,"interchanges":summaries,"status":r.get::<String>(2)?,"metadata":r.get::<String>(1)?,"bytes":bytes,"raw":String::from_utf8_lossy(&bytes),"parsed":edi::parse(&bytes),"events":events}),
         )
     }
     pub fn partner(&self, name: &str) -> Result<usize> {
@@ -339,6 +416,7 @@ impl Engine {
                 || (partner.acknowledge == Policy::Requested && i.header.at(8, 0) == "1");
             let accepted = i.findings.is_empty() && !faults.contains(&Fault::Reject);
             self.findings(id, Some(iid), &i.findings)?;
+            self.event("validated",Some(id),json!({"interchange":iid,"accepted":accepted,"messages":mids.len(),"findings":i.findings.len()}))?;
             let i = Arc::new(i);
             if ack
                 && !faults.contains(&Fault::SuppressAck)
@@ -482,7 +560,18 @@ impl Engine {
                 return Ok(());
             }
             let result = self.action(&mut t, &action);
-            self.event("action",t.root,json!({"execution":t.execution,"action":desc,"error":result.as_ref().err().map(|e|format!("{e:#}"))}))?;
+            let script = match &action {
+                Action::Script { script, .. } => Some(script),
+                _ => None,
+            };
+            self.event(
+                "action",
+                t.root,
+                json!({
+                    "execution":t.execution,"action":desc,"script":script,
+                    "error":result.as_ref().err().map(|e|format!("{e:#}"))
+                }),
+            )?;
             if result.is_err() {
                 break;
             }
@@ -649,6 +738,41 @@ mod tests {
         let id = e.receive(p, bytes, json!({}), None)?.unwrap();
         e.process(p, id, edi::parse(bytes))?;
         Ok(id)
+    }
+    #[test]
+    fn traffic_inspection_search_and_replay() -> Result<()> {
+        let (_dir, w) = fixture()?;
+        let mut engine = Engine::open(w, Arc::new(SystemClock))?;
+        let id = input(&mut engine, 0, ORDER)?;
+        assert_eq!(engine.traffic("po42")?[0].id, id);
+        let orders = engine.traffic("orders")?;
+        assert_eq!(orders.len(), 1);
+        assert_eq!(orders[0].status, "Accepted");
+        let original = engine.take_deliveries().pop().unwrap().id;
+        engine.resend(original)?;
+        engine.resend(engine.traffic("ORDRSP")?[0].id)?;
+        assert_eq!(engine.traffic("ORDRSP")?.len(), 3);
+        let invalid = input(&mut engine, 0, b"garbage")?;
+        assert!(
+            engine
+                .traffic("")?
+                .iter()
+                .any(|t| t.id == invalid && t.attention)
+        );
+        assert_eq!(
+            engine.detail(invalid)?["findings"][0]["code"],
+            "unterminated"
+        );
+        engine.replay(id)?;
+        let replay = engine.traffic("po42")?[0].id;
+        assert_ne!(id, replay);
+        let detail = engine.detail(replay)?;
+        assert_eq!(
+            serde_json::from_str::<Value>(detail["metadata"].as_str().unwrap())?["replay_of"],
+            id
+        );
+        assert_eq!(detail["segments"][2]["elements"][1][0], "PO42");
+        Ok(())
     }
     #[test]
     fn transports_share_fixture_bytes_and_decisions() -> Result<()> {
