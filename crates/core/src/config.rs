@@ -72,6 +72,15 @@ pub enum SendChannel {
     },
 }
 
+impl SendChannel {
+    pub fn metadata(&self) -> serde_json::Value {
+        match self {
+            Self::Http { url, headers } => serde_json::json!({"url":url,"headers":headers}),
+            Self::Folder { directory } => serde_json::json!({"directory":directory}),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Rule {

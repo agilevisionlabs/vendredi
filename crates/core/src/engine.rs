@@ -70,10 +70,6 @@ impl Engine {
         lock.try_lock().context("workspace is already in use")?;
         let store = Store::open(&dir.join("vendredi.db"))?;
         store.batch(include_str!("schema.sql"))?;
-        store.exec(
-            "UPDATE transfers SET status='interrupted' WHERE status='pending'",
-            (),
-        )?;
         for p in &workspace.partners {
             store.exec(
                 "INSERT OR IGNORE INTO partner_state VALUES (?,0,'{}')",
@@ -90,6 +86,16 @@ impl Engine {
             deliveries: Vec::new(),
             events: Vec::new(),
         };
+        for row in e
+            .store
+            .query("SELECT id,root FROM transfers WHERE status='pending'", ())?
+        {
+            let id = row.get::<i64>(0)?;
+            let root = row.get::<i64>(1)?;
+            e.store
+                .exec("UPDATE transfers SET status='interrupted' WHERE id=?", [id])?;
+            e.event("interrupted", Some(root), json!({"transfer":id}))?;
+        }
         e.prune()?;
         Ok(e)
     }
@@ -100,6 +106,7 @@ impl Engine {
             let transfers=format!("SELECT id FROM transfers WHERE root IN ({roots})");
             for sql in [
                 format!("DELETE FROM events WHERE json_extract(body,'$.root') IN ({roots})"),
+                format!("DELETE FROM events WHERE json_extract(body,'$.root') IS NULL AND json_extract(body,'$.execution') IN (SELECT id FROM executions WHERE root IN ({roots}))"),
                 format!("DELETE FROM findings WHERE transfer IN ({transfers})"),
                 format!("DELETE FROM messages WHERE interchange IN (SELECT id FROM interchanges WHERE transfer IN ({transfers}))"),
                 format!("DELETE FROM interchanges WHERE transfer IN ({transfers})"),
@@ -140,14 +147,30 @@ impl Engine {
         let events = self
             .store
             .query(
-                "SELECT body FROM events WHERE json_extract(body,'$.root')=? ORDER BY id",
+                "SELECT body FROM events WHERE json_extract(body,'$.root')=?1
+                 OR (json_extract(body,'$.root') IS NULL AND json_extract(body,'$.execution') IN
+                     (SELECT id FROM executions WHERE root=?1)) ORDER BY id",
                 [root],
             )?
             .iter()
             .map(|r| Ok(serde_json::from_str::<Value>(&r.get::<String>(0)?)?))
             .collect::<Result<Vec<_>>>()?;
+        let summaries = self
+            .store
+            .query(
+                "SELECT id, reference, ack_status FROM interchanges WHERE transfer=? ORDER BY id",
+                [id],
+            )?
+            .iter()
+            .map(|row| {
+                Ok(
+                    json!({"id":row.get::<i64>(0)?, "reference":row.get::<String>(1)?,
+            "acknowledgement":row.get::<String>(2)?}),
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
         Ok(
-            json!({"transfer":id,"status":r.get::<String>(2)?,"metadata":r.get::<String>(1)?,"bytes":bytes,"raw":String::from_utf8_lossy(&bytes),"parsed":edi::parse(&bytes),"events":events}),
+            json!({"transfer":id,"interchanges":summaries,"status":r.get::<String>(2)?,"metadata":r.get::<String>(1)?,"bytes":bytes,"raw":String::from_utf8_lossy(&bytes),"parsed":edi::parse(&bytes),"events":events}),
         )
     }
     pub fn partner(&self, name: &str) -> Result<usize> {
@@ -156,6 +179,18 @@ impl Engine {
             .iter()
             .position(|p| p.name == name)
             .context("unknown partner")
+    }
+    // Called inside the same transaction as the raw transfer insert.
+    fn allocate_transfer(store: &Store) -> Result<i64> {
+        store.exec(
+            "UPDATE transfer_sequence SET last_id=last_id+1 WHERE singleton=1",
+            (),
+        )?;
+        Ok(store.query(
+            "SELECT last_id FROM transfer_sequence WHERE singleton=1",
+            (),
+        )?[0]
+            .get(0)?)
     }
     pub fn receive(
         &mut self,
@@ -174,8 +209,8 @@ impl Engine {
         }
         let partner = &self.workspace.partners[p].name;
         let id=self.store.transaction(|s|{
-            let id=s.exec("INSERT INTO transfers(time,direction,partner,metadata,bytes,status,claim) VALUES (?,'in',?,?,?,'received',?)",
-                (self.clock.millis(),partner.as_str(),meta.to_string(),raw.to_vec(),claim.map(str::to_owned)))?;
+            let id=s.exec("INSERT INTO transfers(id,time,direction,partner,metadata,bytes,status,claim) VALUES (?,?,'in',?,?,?,'received',?)",
+                (Self::allocate_transfer(s)?,self.clock.millis(),partner.as_str(),meta.to_string(),raw.to_vec(),claim.map(str::to_owned)))?;
             s.exec("UPDATE transfers SET root=? WHERE id=?",(id,id))?; Ok(id)
         })?;
         self.event(
@@ -390,9 +425,9 @@ impl Engine {
                 time:DateTime::from_timestamp_millis(now).context("invalid clock")?,wrong_count:t.faults.contains(&Fault::WrongCount)},m)?;
             if t.faults.contains(&Fault::Malformed){bytes.pop();}
             s.exec("UPDATE partner_state SET reference=? WHERE partner=?",(next,name))?;
-            let metadata=match &partner.send {SendChannel::Http{url,headers}=>json!({"url":url,"headers":headers}),SendChannel::Folder{directory}=>json!({"directory":directory})};
-            let id=s.exec("INSERT INTO transfers(root,time,direction,partner,metadata,bytes,status,execution) VALUES (?,?,'out',?,?,?,'pending',?)",
-                (t.root,now,name,metadata.to_string(),bytes.clone(),t.execution))?;
+            let metadata = partner.send.metadata();
+            let id=s.exec("INSERT INTO transfers(id,root,time,direction,partner,metadata,bytes,status,execution) VALUES (?,?,?,'out',?,?,?,'pending',?)",
+                (Self::allocate_transfer(s)?,t.root,now,name,metadata.to_string(),bytes.clone(),t.execution))?;
             let root=t.root.unwrap_or(id);
             if t.root.is_none(){s.exec("UPDATE transfers SET root=? WHERE id=?",(root,id))?;s.exec("UPDATE executions SET root=? WHERE id=?",(root,t.execution))?;}
             if let Some(i)=edi::parse(&bytes).interchanges.first(){Self::summary(s,id,i)?;}
@@ -409,6 +444,9 @@ impl Engine {
             Some(root),
             json!({"transfer":id,"execution":t.execution,"type":m.kind(),"partner":name}),
         )?;
+        if t.faults.contains(&Fault::Duplicate) {
+            self.repeat_delivery(id, Some(t.execution))?;
+        }
         Ok(())
     }
     pub fn finish_delivery(&mut self, id: i64, result: Result<String, String>) -> Result<()> {
@@ -458,9 +496,6 @@ impl Engine {
             Action::Document { document } => {
                 let m = edi::document(&fs::read(self.workspace.root.join(document))?)?;
                 self.send(t, &m)?;
-                if t.faults.contains(&Fault::Duplicate) {
-                    self.send(t, &m)?;
-                }
             }
             Action::Script {
                 script: path,
@@ -546,8 +581,11 @@ impl Engine {
         self.execute(t)
     }
     pub fn resend(&mut self, id: i64) -> Result<()> {
+        self.repeat_delivery(id, None)
+    }
+    fn repeat_delivery(&mut self, id: i64, parent_execution: Option<i64>) -> Result<()> {
         let rows = self.store.query(
-            "SELECT bytes,partner,root,metadata FROM transfers WHERE id=? AND direction='out'",
+            "SELECT bytes,partner,root FROM transfers WHERE id=? AND direction='out'",
             [id],
         )?;
         let r = rows
@@ -557,10 +595,17 @@ impl Engine {
         let root = r.get::<i64>(2)?;
         let bytes = r.get::<Vec<u8>>(0)?;
         let p = self.partner(&name)?;
-        let t = self.task(p, Some(root), (None, None), "command: resend", vec![], None)?;
+        let execution = match parent_execution {
+            Some(id) => id,
+            None => {
+                self.task(p, Some(root), (None, None), "command: resend", vec![], None)?
+                    .execution
+            }
+        };
+        let metadata = self.workspace.partners[p].send.metadata();
         let new=self.store.transaction(|s|{
-            let new=s.exec("INSERT INTO transfers(root,time,direction,partner,metadata,bytes,status,execution,resend_of) VALUES (?,?,'out',?,?,?,'pending',?,?)",
-            (root,self.clock.millis(),name,r.get::<String>(3)?,bytes.clone(),t.execution,id))?;
+            let new=s.exec("INSERT INTO transfers(id,root,time,direction,partner,metadata,bytes,status,execution,resend_of) VALUES (?,?,?,'out',?,?,?,'pending',?,?)",
+            (Self::allocate_transfer(s)?,root,self.clock.millis(),name.as_str(),metadata.to_string(),bytes.clone(),execution,id))?;
             Ok(new)
         })?;
         self.deliveries.push(Delivery {
@@ -571,7 +616,7 @@ impl Engine {
         self.event(
             "resent",
             Some(root),
-            json!({"transfer":new,"resend_of":id,"execution":t.execution}),
+            json!({"transfer":new,"resend_of":id,"execution":execution,"partner":name}),
         )
     }
 }
@@ -597,12 +642,76 @@ mod tests {
             dir.path().join("confirmation.edi"),
             include_bytes!("../../../examples/orders/confirmation.edi"),
         )?;
-        Ok((dir.path().to_owned(), dir)).and_then(|(root, dir)| Ok((dir, Workspace::load(&root)?)))
+        let w = Workspace::load(dir.path())?;
+        Ok((dir, w))
     }
     fn input(e: &mut Engine, p: usize, bytes: &[u8]) -> Result<i64> {
         let id = e.receive(p, bytes, json!({}), None)?.unwrap();
         e.process(p, id, edi::parse(bytes))?;
         Ok(id)
+    }
+    #[test]
+    fn transports_share_fixture_bytes_and_decisions() -> Result<()> {
+        let date = "2026-11-24T10:30:00Z".parse::<DateTime<Utc>>()?;
+        let mut traces = Vec::new();
+        for folder in [false, true] {
+            let (_dir, mut w) = fixture()?;
+            let metadata = if folder {
+                json!({"file":"order.edi"})
+            } else {
+                json!({"path":"/supplier/orders"})
+            };
+            if folder {
+                w.partners[0].send = SendChannel::Folder {
+                    directory: "out".into(),
+                };
+            }
+            let mut engine =
+                Engine::open(w, Arc::new(Manual(AtomicI64::new(date.timestamp_millis()))))?;
+            let id = engine.receive(0, ORDER, metadata, None)?.unwrap();
+            engine.process(0, id, edi::parse(ORDER))?;
+            let replies = engine.take_deliveries();
+            assert_eq!(replies.len(), 2);
+            for (d, expected) in replies.iter().zip([
+                include_str!("../../../examples/orders/expected/ack.edi"),
+                include_str!("../../../examples/orders/expected/response.edi"),
+            ]) {
+                assert_eq!(d.bytes, expected.trim_end().as_bytes());
+            }
+            let mut trace = engine.take_events();
+            trace[0].as_object_mut().unwrap().remove("metadata");
+            traces.push(trace);
+        }
+        assert_eq!(traces[0], traces[1]);
+        Ok(())
+    }
+    #[test]
+    fn retention_preserves_references_and_unique_delivery_filenames() -> Result<()> {
+        let (_dir, mut w) = fixture()?;
+        w.retention_days = 1;
+        let clock = Arc::new(Manual(AtomicI64::new(1000)));
+        let mut e = Engine::open(w.clone(), clock.clone())?;
+        input(&mut e, 0, ORDER)?;
+        let previous = e.take_deliveries().pop().unwrap().id;
+        drop(e);
+        clock.0.store(1000 + 2 * 86_400_000, Ordering::SeqCst);
+        let mut e = Engine::open(w, clock)?;
+        assert!(e.detail(previous).is_err());
+        e.initiate("Supplier", Path::new("confirmation.edi"), None)?;
+        let transfer = e.take_deliveries().pop().unwrap();
+        assert!(transfer.id > previous);
+        assert_eq!(
+            edi::parse(&transfer.bytes).interchanges[0].header.at(4, 0),
+            "3"
+        );
+        assert!(
+            e.detail(transfer.id)?["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v["name"] == "command: send")
+        );
+        Ok(())
     }
     #[test]
     fn partner_delay_script_state_and_faults_are_isolated() -> Result<()> {

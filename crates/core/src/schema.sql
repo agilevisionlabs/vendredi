@@ -22,3 +22,7 @@ CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, body TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS partner_state(partner TEXT PRIMARY KEY, reference INTEGER NOT NULL, data TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS transfer_root ON transfers(root);
 CREATE INDEX IF NOT EXISTS interchange_ref ON interchanges(reference);
+
+-- Transfer IDs also name published files. Keep their high-water mark across retention.
+CREATE TABLE IF NOT EXISTS transfer_sequence(singleton INTEGER PRIMARY KEY, last_id INTEGER NOT NULL);
+INSERT OR IGNORE INTO transfer_sequence SELECT 1, COALESCE(MAX(id),0) FROM transfers;
