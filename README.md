@@ -6,6 +6,8 @@ An EDI simulator for developers: a fake trading partner that runs on your machin
 
 Open the `vendredi` executable. On first launch it creates a sample workspace in the user's home directory under `Vendredi`. Choose **Send sample order** in the empty traffic list or from **Send document…**. Select the inbound transfer or either reply to inspect its raw bytes, validation findings and execution history. The sample supplier writes a `CONTRL` and an `ORDRSP` into the workspace’s `replies` folder.
 
+For illustrated examples of traffic search, match highlighting and partner rule order, see the [traffic and rules guide](docs/guide/traffic-and-rules.md).
+
 To run the sample headless, initialize a workspace and start its listener.
 
 ```sh
