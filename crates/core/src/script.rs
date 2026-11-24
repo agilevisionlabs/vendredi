@@ -1,5 +1,5 @@
 use anyhow::{Result, anyhow, ensure};
-use boa_engine::{Context, Source};
+use boa_engine::{Context, Script, Source};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -55,9 +55,23 @@ pub fn run(source: &str, function: &str, input: &Input<'_>) -> Result<Effects> {
     }})(JSON.parse({data}))"#,
         data = serde_json::to_string(&serde_json::to_string(input)?)?
     );
-    let result = cx
-        .eval(Source::from_bytes(&program))
-        .map_err(|e| anyhow!("{e}"))?;
+    let script =
+        Script::parse(Source::from_bytes(&program), None, &mut cx).map_err(|e| anyhow!("{e}"))?;
+    let result = {
+        // Boa yields after each quantum. An invocation has no asynchronous host I/O,
+        // so each pending poll consumes another slice of its instruction budget.
+        let mut evaluation = std::pin::pin!(script.evaluate_async_with_budget(&mut cx, 1024));
+        let mut task = std::task::Context::from_waker(std::task::Waker::noop());
+        (0..1024)
+            .find_map(
+                |_| match std::future::Future::poll(evaluation.as_mut(), &mut task) {
+                    std::task::Poll::Ready(result) => Some(result),
+                    std::task::Poll::Pending => None,
+                },
+            )
+            .ok_or_else(|| anyhow!("script exceeded its instruction budget"))?
+            .map_err(|e| anyhow!("{e}"))?
+    };
     let json = result
         .as_string()
         .ok_or_else(|| anyhow!("missing script result"))?
@@ -76,7 +90,11 @@ mod tests {
             reference: 0,
             now: 1,
         };
-        for bad in ["function act(){while(true){}}", "function act(){act()}"] {
+        for bad in [
+            "function act(){while(true){}}",
+            "function act(){act()}",
+            "function act(){for(let i=0;i<99999;i++)for(let j=0;j<99999;j++){} }",
+        ] {
             assert!(run(bad, "act", &input).is_err());
             let ok = run(
                 "function act(i, api){api.log(api.nextReference())}",

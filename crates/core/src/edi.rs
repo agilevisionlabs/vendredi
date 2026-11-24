@@ -189,6 +189,27 @@ fn skip_lines(raw: &[u8], pos: &mut usize) {
         *pos += 1;
     }
 }
+fn validate_segment_bytes(
+    raw: &[u8],
+    start: usize,
+    end: usize,
+    charset: &str,
+    findings: &mut Vec<Finding>,
+) {
+    if let Some(index) = raw[start..end].iter().position(|&b| match charset {
+        "UNOA" => !(b.is_ascii_uppercase() || b.is_ascii_digit() || b" .,-()/='+?:".contains(&b)),
+        "UNOB" => !(32..=126).contains(&b),
+        "UNOC" => b < 32 || (127..160).contains(&b),
+        _ => false,
+    }) {
+        findings.push(Finding::new(
+            "character_set",
+            start + index,
+            format!("byte is outside the configured {charset} repertoire"),
+        ));
+    }
+}
+
 pub fn parse(raw: &[u8]) -> Parsed {
     let mut out = Parsed::default();
     let mut pos = 0;
@@ -244,6 +265,17 @@ pub fn parse(raw: &[u8]) -> Parsed {
                     "unsupported syntax or incomplete UNB",
                 ));
             }
+            let datetime = format!("{}{}", s.at(3, 0), s.at(3, 1));
+            if datetime.len() != 10
+                || chrono::NaiveDateTime::parse_from_str(&datetime, "%y%m%d%H%M").is_err()
+            {
+                findings.push(Finding::new(
+                    "interchange_time",
+                    s.offset,
+                    "invalid UNB preparation date or time",
+                ));
+            }
+            validate_segment_bytes(raw, s.offset, pos, s.at(0, 0), &mut findings);
             current = Some(Interchange {
                 header: s,
                 syntax,
@@ -257,6 +289,7 @@ pub fn parse(raw: &[u8]) -> Parsed {
                 .push(Finding::new("outside_envelope", s.offset, "expected UNB"));
             continue;
         };
+        validate_segment_bytes(raw, s.offset, pos, i.header.at(0, 0), &mut i.findings);
         match s.tag.as_str() {
             "UNH" => {
                 if message.is_some() {
@@ -341,6 +374,14 @@ pub fn document(raw: &[u8]) -> Result<Message> {
     );
     ensure!(!segments[0].at(1, 0).is_empty(), "missing message type");
     Ok(Message { segments })
+}
+
+pub fn script_document(text: &str) -> Result<Message> {
+    let bytes = text
+        .chars()
+        .map(|c| u8::try_from(u32::from(c)))
+        .collect::<Result<Vec<_>, _>>()?;
+    document(&bytes)
 }
 
 pub fn contrl(i: &Interchange, accept: bool) -> Message {
@@ -446,6 +487,20 @@ mod tests {
         assert!(p.interchanges[0].findings.is_empty());
         assert_eq!(m.segments[1].at(0, 0), "42");
         assert_eq!(m.kind(), "CONTRL");
+    }
+    #[test]
+    fn repertoire_and_repeated_messages() {
+        let raw=b"UNB+UNOA:3+B+S+261124:1000+1'UNH+1+ORDERS:D:96A:UN'FTX+lower'UNT+3+1'UNH+2+ORDERS:D:96A:UN'UNT+2+2'UNZ+2+1'";
+        let i = &parse(raw).interchanges[0];
+        assert_eq!(i.messages.len(), 2);
+        let findings = &i.findings;
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0].offset,
+            raw.iter().position(|&b| b == b'l').unwrap()
+        );
+        let m = script_document("UNH+1+ORDRSP:D:96A:UN'FTX+Café'UNT+3+1'").unwrap();
+        assert_eq!(m.segments[1].at(0, 0), "Café");
     }
     #[test]
     fn captures_unparseable_bytes() {

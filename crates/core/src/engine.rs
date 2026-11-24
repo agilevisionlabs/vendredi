@@ -522,7 +522,7 @@ impl Engine {
                 let messages = effects
                     .sends
                     .iter()
-                    .map(|raw| edi::document(raw.as_bytes()))
+                    .map(|raw| edi::script_document(raw))
                     .collect::<Result<Vec<_>>>()?;
                 ensure!(
                     !effects.acknowledge || t.inbound.is_some(),
