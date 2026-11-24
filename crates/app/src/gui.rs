@@ -1,6 +1,8 @@
 mod inspector;
+mod partners;
 mod theme;
 mod window;
+mod workspace_edit;
 use crate::runtime::{self, Command, Running};
 use anyhow::{Context, Result, anyhow, ensure};
 use eframe::egui;
@@ -70,11 +72,11 @@ struct Desktop {
     filter_status: String,
     listening: bool,
     send_dialog: bool,
-    add_dialog: bool,
-    new_partner: String,
+    partner_form: Option<partners::PartnerForm>,
     partner: usize,
     send_file: String,
     function: String,
+    config_source: String,
     edit_file: PathBuf,
     saved: String,
     edit: String,
@@ -120,12 +122,12 @@ impl Desktop {
             filter_status: "Any".into(),
             listening: true,
             send_dialog: false,
-            add_dialog: false,
-            new_partner: String::new(),
+            partner_form: None,
             partner: 0,
             send_file,
             function: String::new(),
             edit_file,
+            config_source: saved.clone(),
             edit: saved.clone(),
             saved,
             status: String::new(),
@@ -308,40 +310,19 @@ impl Desktop {
     }
     fn save(&mut self) -> Result<()> {
         let file = self.root.join(&self.edit_file);
-        ensure!(
-            fs::read_to_string(&file)? == self.saved,
-            "file changed on disk; reopen it before saving"
-        );
-        replace(&file, &self.edit)?;
-        let w = match Workspace::load(&self.root) {
-            Ok(w) => w,
-            Err(e) => {
-                replace(&file, &self.saved)?;
-                return Err(e);
-            }
-        };
-        self.running.stop()?;
-        match runtime::start(w.clone(), self.output.clone(), false, self.listening) {
-            Ok(r) => {
-                self.running = r;
-                self.workspace = w;
-                self.partner = 0;
-                self.command(Command::Traffic(String::new()));
-                self.saved = self.edit.clone();
-                self.status = "Saved and reloaded workspace".into();
-                Ok(())
-            }
-            Err(e) => {
-                replace(&file, &self.saved)?;
-                self.running = runtime::start(
-                    self.workspace.clone(),
-                    self.output.clone(),
-                    false,
-                    self.listening,
-                )?;
-                Err(e)
-            }
+        let before = self.saved.clone();
+        let after = self.edit.clone();
+        self.apply_files(&[workspace_edit::FileEdit {
+            path: &file,
+            before: Some(&before),
+            after: &after,
+        }])?;
+        if self.edit_file == Path::new("vendredi.toml") {
+            self.config_source.clone_from(&after);
         }
+        self.saved = after;
+        self.status = "Saved and reloaded workspace".into();
+        Ok(())
     }
     fn editor(&mut self, ui: &mut egui::Ui) {
         let title = match self.view {
@@ -442,7 +423,7 @@ mod tests {
             |ctx| app.show(ctx),
         )
     }
-    fn click(app: &mut Desktop, ctx: &egui::Context, label: &str) -> Result<()> {
+    pub(super) fn click(app: &mut Desktop, ctx: &egui::Context, label: &str) -> Result<()> {
         let output = frame(app, ctx, vec![]);
         let pos = output
             .shapes

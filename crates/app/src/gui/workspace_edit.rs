@@ -1,0 +1,131 @@
+use super::*;
+use toml_edit::{ArrayOfTables, Item, Table};
+
+/// Accept both inline arrays and repeated TOML table headers.
+pub(super) fn tables<'a>(parent: &'a mut Table, key: &str) -> Result<&'a mut ArrayOfTables> {
+    let item = parent.entry(key).or_insert(Item::None);
+    if !item.is_array_of_tables() {
+        *item = if item.is_none() || item.as_array().is_some_and(|a| a.is_empty()) {
+            Item::ArrayOfTables(ArrayOfTables::new())
+        } else {
+            Item::ArrayOfTables(
+                std::mem::take(item)
+                    .into_array_of_tables()
+                    .map_err(|_| anyhow!("expected a list of {key}"))?,
+            )
+        };
+    }
+    Ok(item.as_array_of_tables_mut().unwrap())
+}
+
+pub(super) struct FileEdit<'a> {
+    pub path: &'a Path,
+    pub before: Option<&'a str>,
+    pub after: &'a str,
+}
+impl FileEdit<'_> {
+    fn verify(&self) -> Result<()> {
+        match fs::read_to_string(self.path) {
+            Ok(text) => ensure!(
+                Some(text.as_str()) == self.before,
+                "{} changed on disk. Reopen the workspace before saving.",
+                self.path.display()
+            ),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && self.before.is_none() => (),
+            Err(e) => return Err(e.into()),
+        }
+        Ok(())
+    }
+    fn write(&self) -> Result<()> {
+        if self.before.is_some() {
+            return replace(self.path, self.after);
+        }
+        let parent = self.path.parent().context("missing parent directory")?;
+        fs::create_dir_all(parent)?;
+        let mut f = tempfile::NamedTempFile::new_in(parent)?;
+        f.write_all(self.after.as_bytes())?;
+        f.as_file().sync_all()?;
+        f.persist_noclobber(self.path)?;
+        Ok(())
+    }
+    fn rollback(&self) -> Result<()> {
+        if let Some(old) = self.before {
+            replace(self.path, old)
+        } else {
+            Ok(fs::remove_file(self.path)?)
+        }
+    }
+}
+
+impl Desktop {
+    pub(super) fn apply_files(&mut self, edits: &[FileEdit<'_>]) -> Result<()> {
+        for edit in edits {
+            edit.verify()?;
+        }
+        let mut written = Vec::new();
+        let mut stopped = false;
+        let apply = (|| -> Result<()> {
+            for edit in edits {
+                if edit.before != Some(edit.after) {
+                    edit.write()?;
+                    written.push(edit);
+                }
+            }
+            let workspace = Workspace::load(&self.root)?;
+            stopped = true;
+            self.running.stop()?;
+            self.running = runtime::start(
+                workspace.clone(),
+                self.output.clone(),
+                false,
+                self.listening,
+            )?;
+            self.workspace = workspace;
+            self.partner = self.partner.min(self.workspace.partners.len() - 1);
+            self.command(Command::Traffic(String::new()));
+            if !self.search.is_empty() {
+                self.command(Command::Traffic(self.search.clone()));
+            }
+            Ok(())
+        })();
+        if let Err(error) = apply {
+            for edit in written.into_iter().rev() {
+                edit.rollback().with_context(|| {
+                    format!("restoring {} after {error:#}", edit.path.display())
+                })?;
+            }
+            if stopped {
+                self.running = runtime::start(
+                    self.workspace.clone(),
+                    self.output.clone(),
+                    false,
+                    self.listening,
+                )?;
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    pub(super) fn save_configuration(
+        &mut self,
+        config: String,
+        script: Option<FileEdit<'_>>,
+    ) -> Result<()> {
+        let before = self.config_source.clone();
+        let path = self.root.join("vendredi.toml");
+        let mut edits = Vec::from_iter(script);
+        edits.push(FileEdit {
+            path: &path,
+            before: Some(&before),
+            after: &config,
+        });
+        self.apply_files(&edits)?;
+        self.config_source = config;
+        if self.edit_file == Path::new("vendredi.toml") {
+            self.edit.clone_from(&self.config_source);
+            self.saved.clone_from(&self.config_source);
+        }
+        Ok(())
+    }
+}

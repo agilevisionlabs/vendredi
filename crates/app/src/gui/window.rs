@@ -141,7 +141,7 @@ impl Desktop {
                     }
                     ui.add_space(4.);
                     if add_partner_button(ui) {
-                        self.add_dialog = true;
+                        self.open_partner(None);
                     }
                     ui.add_space(18.);
                     section(ui, "  WORKSPACE");
@@ -165,7 +165,18 @@ impl Desktop {
                     Frame::new().inner_margin(16).show(ui, |ui| self.editor(ui));
                     return;
                 }
-                let r = ui.max_rect();
+                if let View::Partner(i) = self.view {
+                    Frame::new().inner_margin(12).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.heading(&self.workspace.partners[i].name);
+                            if ui.button("Edit partner").clicked() {
+                                self.open_partner(Some(i));
+                            }
+                        });
+                    });
+                    ui.separator();
+                }
+                let r = ui.available_rect_before_wrap();
                 let (list, inspect) = if r.width() >= 880. {
                     let mid = r.center().x;
                     (
@@ -422,19 +433,6 @@ impl Desktop {
                 });
             self.send_dialog &= open;
         }
-        if self.add_dialog {
-            let mut open = true;
-            Window::new("Add partner").open(&mut open).resizable(false).collapsible(false).show(ctx,|ui|{
-                ui.label("Partner name");ui.text_edit_singleline(&mut self.new_partner);
-                if ui.add_enabled(!self.new_partner.trim().is_empty() && self.edit==self.saved,Button::new("Edit partner configuration")).clicked(){
-                    self.navigate(View::Settings);
-                    let n=self.workspace.partners.len()+1;
-                    let name=serde_json::to_string(self.new_partner.trim()).unwrap_or_default();
-                    self.edit.push_str(&format!("\n[[partners]]\nname = {name}\nidentity = [\"PARTNER{n}\", \"ZZ\"]\ncharset = \"UNOC\"\nacknowledge = \"always\"\nreceive = [{{ path = \"/partners/{n}\" }}]\nsend = {{ directory = \"replies-{n}\" }}\n"));
-                    self.add_dialog=false;self.new_partner.clear();
-                }
-            });
-            self.add_dialog &= open;
-        }
+        self.partner_dialog(ctx);
     }
 }

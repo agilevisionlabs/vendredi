@@ -1,6 +1,6 @@
 use crate::edi::{self, Syntax};
 use anyhow::{Context, Result, ensure};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashSet},
     fs,
@@ -18,7 +18,7 @@ pub struct Workspace {
     #[serde(skip)]
     pub root: PathBuf,
 }
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Partner {
     pub name: String,
@@ -46,20 +46,20 @@ impl Partner {
         Ok(syntax)
     }
 }
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Policy {
     Always,
     Requested,
     Never,
 }
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(untagged, deny_unknown_fields)]
 pub enum Receive {
     Http { path: String },
     Folder { directory: PathBuf, suffix: String },
 }
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(untagged, deny_unknown_fields)]
 pub enum SendChannel {
     Http {
@@ -81,7 +81,7 @@ impl SendChannel {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Rule {
     pub name: String,
@@ -103,7 +103,7 @@ impl Rule {
                 .is_none_or(|s| s == m.header().at(1, 2))
     }
 }
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(untagged, deny_unknown_fields)]
 pub enum Action {
     Document { document: PathBuf },
@@ -111,7 +111,7 @@ pub enum Action {
     Delay { delay_ms: u32 },
     Fault { fault: Fault },
 }
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Fault {
     Reject,
