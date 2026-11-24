@@ -24,7 +24,7 @@ fn transport(v: &Value) -> String {
 enum Link {
     Transfer(i64, String),
     Rule(String),
-    Script(PathBuf),
+    Script(PathBuf, Option<String>),
 }
 struct Step {
     at: i64,
@@ -99,7 +99,12 @@ impl Desktop {
                 }
                 "action" if text(v, "action").starts_with("Script") => {
                     if let Some(p) = v["script"].as_str() {
-                        link = Some(Link::Script(p.into()));
+                        let rule = events
+                            .iter()
+                            .find(|e| e["event"] == "execution" && e["execution"] == v["execution"])
+                            .and_then(|e| e["name"].as_str())
+                            .map(str::to_owned);
+                        link = Some(Link::Script(p.into(), rule));
                     }
                     let logs = events
                         .iter()
@@ -214,7 +219,7 @@ impl Desktop {
                         if let Some(link) = &step.link {
                             let label = match link {
                                 Link::Transfer(_, s) | Link::Rule(s) => s.clone(),
-                                Link::Script(p) => p.display().to_string(),
+                                Link::Script(p, _) => p.display().to_string(),
                             };
                             if ui
                                 .link(
@@ -238,11 +243,8 @@ impl Desktop {
                                         self.select(*id);
                                     }
                                     Link::Rule(_) => self.navigate(View::Rules),
-                                    Link::Script(p) => {
-                                        self.navigate(View::Scripts);
-                                        if self.view == View::Scripts {
-                                            self.open_file(p.clone());
-                                        }
+                                    Link::Script(p, rule) => {
+                                        self.edit_script_link(p, &row.partner, rule.as_deref());
                                     }
                                 }
                             }

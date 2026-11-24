@@ -1,5 +1,6 @@
 mod inspector;
 mod partners;
+mod scripts;
 mod theme;
 mod window;
 mod workspace_edit;
@@ -73,6 +74,7 @@ struct Desktop {
     listening: bool,
     send_dialog: bool,
     partner_form: Option<partners::PartnerForm>,
+    script_form: Option<scripts::ScriptForm>,
     partner: usize,
     send_file: String,
     function: String,
@@ -123,6 +125,7 @@ impl Desktop {
             listening: true,
             send_dialog: false,
             partner_form: None,
+            script_form: None,
             partner: 0,
             send_file,
             function: String::new(),
@@ -261,7 +264,7 @@ impl Desktop {
         Ok(())
     }
     fn files(&self) -> Vec<PathBuf> {
-        if !matches!(self.view, View::Documents | View::Scripts) {
+        if self.view != View::Documents {
             return vec!["vendredi.toml".into()];
         }
         let mut paths = BTreeSet::new();
@@ -272,28 +275,23 @@ impl Desktop {
             .flat_map(|p| &p.rules)
             .flat_map(|r| &r.actions)
         {
-            match (&self.view, a) {
-                (View::Documents, Action::Document { document }) => {
-                    paths.insert(document.clone());
-                }
-                (View::Scripts, Action::Script { script, .. }) => {
-                    paths.insert(script.clone());
-                }
-                _ => {}
+            if let Action::Document { document } = a {
+                paths.insert(document.clone());
             }
         }
         paths.into_iter().collect()
     }
     fn navigate(&mut self, view: View) {
-        if self.edit != self.saved && self.view != view {
+        if self.view == view {
+            return;
+        }
+        if self.edit != self.saved {
             self.status = "Save or reload the edited file before switching views".into();
             return;
         }
         self.view = view;
-        if matches!(
-            self.view,
-            View::Rules | View::Scripts | View::Documents | View::Settings
-        ) && let Some(path) = self.files().first()
+        if matches!(self.view, View::Rules | View::Documents | View::Settings)
+            && let Some(path) = self.files().first()
         {
             self.open_file(path.clone());
         }
@@ -326,7 +324,6 @@ impl Desktop {
     }
     fn editor(&mut self, ui: &mut egui::Ui) {
         let title = match self.view {
-            View::Scripts => "Scripts",
             View::Documents => "Documents",
             View::Rules => "Rules",
             _ => "Settings",

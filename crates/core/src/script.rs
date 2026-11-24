@@ -21,8 +21,12 @@ pub struct Effects {
     pub acknowledge: bool,
 }
 
-/// Evaluate each invocation in a fresh realm. Only completed invocations return effects.
-pub fn run(source: &str, function: &str, input: &Input<'_>) -> Result<Effects> {
+pub fn validate(source: &str, function: &str) -> Result<()> {
+    compile(&mut Context::default(), source, function, "null")?;
+    Ok(())
+}
+
+fn compile(cx: &mut Context, source: &str, function: &str, input_json: &str) -> Result<Script> {
     ensure!(
         !function.is_empty()
             && function
@@ -33,9 +37,6 @@ pub fn run(source: &str, function: &str, input: &Input<'_>) -> Result<Effects> {
                     || (i > 0 && c.is_ascii_digit())),
         "invalid JavaScript function name"
     );
-    let mut cx = Context::default();
-    cx.runtime_limits_mut().set_loop_iteration_limit(100_000);
-    cx.runtime_limits_mut().set_recursion_limit(64);
     let program = format!(
         r#"((input) => {{
         const effects = {{ sends: [], logs: [], state: input.state, reference: input.reference, acknowledge: false }};
@@ -53,10 +54,17 @@ pub fn run(source: &str, function: &str, input: &Input<'_>) -> Result<Effects> {
         {function}(input.interchange, api);
         return JSON.stringify(effects);
     }})(JSON.parse({data}))"#,
-        data = serde_json::to_string(&serde_json::to_string(input)?)?
+        data = serde_json::to_string(input_json)?
     );
-    let script =
-        Script::parse(Source::from_bytes(&program), None, &mut cx).map_err(|e| anyhow!("{e}"))?;
+    Script::parse(Source::from_bytes(&program), None, cx).map_err(|e| anyhow!("{e}"))
+}
+
+/// Evaluate each invocation in a fresh realm. Only completed invocations return effects.
+pub fn run(source: &str, function: &str, input: &Input<'_>) -> Result<Effects> {
+    let mut cx = Context::default();
+    cx.runtime_limits_mut().set_loop_iteration_limit(100_000);
+    cx.runtime_limits_mut().set_recursion_limit(64);
+    let script = compile(&mut cx, source, function, &serde_json::to_string(input)?)?;
     let result = {
         // Boa yields after each quantum. An invocation has no asynchronous host I/O,
         // so each pending poll consumes another slice of its instruction budget.

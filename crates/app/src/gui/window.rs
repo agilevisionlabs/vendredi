@@ -161,6 +161,12 @@ impl Desktop {
         CentralPanel::default()
             .frame(Frame::new().fill(BG))
             .show(ctx, |ui| {
+                if self.view == View::Scripts {
+                    Frame::new()
+                        .inner_margin(16)
+                        .show(ui, |ui| self.scripts(ui));
+                    return;
+                }
                 if !matches!(self.view, View::All | View::Attention | View::Partner(_)) {
                     Frame::new().inner_margin(16).show(ui, |ui| self.editor(ui));
                     return;
@@ -434,5 +440,6 @@ impl Desktop {
             self.send_dialog &= open;
         }
         self.partner_dialog(ctx);
+        self.script_dialog(ctx);
     }
 }
