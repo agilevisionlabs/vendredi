@@ -1,0 +1,180 @@
+"""Run real HTTP, watched-folder, CLI and recovery checks against a local Vendredi binary."""
+import argparse
+import contextlib
+import http.client
+import http.server
+import json
+import os
+from pathlib import Path
+import queue
+import shutil
+import socket
+import sqlite3
+import subprocess
+import tempfile
+import threading
+import time
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+BINARY = ROOT / "target/debug/vendredi"
+SAMPLE = ROOT / "examples/orders"
+
+
+def port():
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+class Instance:
+    def __init__(self, workspace):
+        self.proc = subprocess.Popen([BINARY, "run", "--headless", workspace],
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE, text=True)
+        self.events = queue.Queue()
+        self.seen = []
+        def read():
+            for line in self.proc.stdout:
+                self.events.put(json.loads(line))
+            self.events.put(None)
+        self.reader = threading.Thread(target=read, daemon=True)
+        self.reader.start()
+        try:
+            self.wait("ready")
+        except BaseException:
+            self.close()
+            raise
+
+    def wait(self, kind):
+        while True:
+            event = self.events.get(timeout=10)
+            if event is None:
+                raise AssertionError(self.proc.stderr.read())
+            self.seen.append(event)
+            if event["event"] == "error":
+                raise AssertionError(event)
+            if event["event"] == kind:
+                return event
+
+    def command(self, *args):
+        self.proc.stdin.write(json.dumps(args) + "\n")
+        self.proc.stdin.flush()
+
+    def close(self, crash=False):
+        if self.proc.poll() is None:
+            if crash:
+                self.proc.kill()
+            else:
+                self.proc.stdin.write("quit\n")
+                self.proc.stdin.flush()
+            self.proc.wait(timeout=10)
+        self.reader.join(timeout=2)
+        for pipe in (self.proc.stdin, self.proc.stdout, self.proc.stderr):
+            pipe.close()
+
+
+class LocalExchange(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.listener = port()
+        self.config = (SAMPLE / "vendredi.toml").read_text().replace(":8180", f":{self.listener}")
+        self.order = (SAMPLE / "order.edi").read_bytes()
+        shutil.copy(SAMPLE / "confirmation.edi", self.root)
+        self.db = self.root / ".vendredi/vendredi.db"
+
+    def launch(self):
+        (self.root / "vendredi.toml").write_text(self.config)
+        app = Instance(self.root)
+        self.addCleanup(app.close)
+        return app
+
+    def post(self, data):
+        conn = http.client.HTTPConnection("127.0.0.1", self.listener, timeout=5)
+        try:
+            conn.request("POST", "/supplier/orders", data, {"Content-Type": "application/edifact"})
+            r = conn.getresponse()
+            return r.status, r.read()
+        finally:
+            conn.close()
+
+    def test_http_delivery_failure_restart_and_resend(self):
+        replies = queue.Queue()
+        class Partner(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                replies.put(self.rfile.read(int(self.headers["Content-Length"])))
+                self.send_response(204)
+                self.end_headers()
+            def log_message(self, *args):
+                pass
+        with http.server.ThreadingHTTPServer(("127.0.0.1", 0), Partner) as server:
+            self.config = self.config.replace(":8181", f":{server.server_port}")
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                app = self.launch()
+                self.assertEqual(self.post(self.order), (202, b""))
+                a, b = [replies.get(timeout=5) for _ in range(2)]
+                self.assertIn(b"UCI+ORDER42+BUYER:ZZ+SUPPLIER:ZZ+7'", a)
+                self.assertIn(b"UNB+UNOC:3+SUPPLIER:ZZ+BUYER:ZZ+", b)
+                self.assertIn(b"ORDRSP:D:96A:UN'", b)
+                self.assertTrue(b.endswith(b"UNT+3+1'UNZ+1+2'"))
+                app.wait("delivered")
+                app.wait("delivered")
+            finally:
+                server.shutdown()
+                thread.join()
+        self.assertEqual(self.post(b"\xffgarbage"), (202, b""))
+        app.wait("finding")
+        app.command("send", "Supplier", "confirmation.edi")
+        failed = app.wait("failed")["transfer"]
+        app.close(crash=True)
+        app = self.launch()
+        app.command("resend", str(failed))
+        self.assertNotEqual(app.wait("failed")["transfer"], failed)
+        app.close()
+        with contextlib.closing(sqlite3.connect(self.db)) as db:
+            self.assertEqual(db.execute("pragma integrity_check").fetchone(), ("ok",))
+            self.assertEqual(db.execute("select count(*) from transfers where status='failed'").fetchone(), (2,))
+            self.assertEqual(db.execute("select bytes from transfers where id=(select transfer from findings limit 1)").fetchone(), (b"\xffgarbage",))
+            self.assertEqual(db.execute("select count(*) from transfers t join executions e on e.id=t.execution where t.direction='out' and e.root=1").fetchone(), (2,))
+            self.assertEqual(db.execute("select count(*) from transfers where resend_of=?", (failed,)).fetchone(), (1,))
+
+    def test_folder_publication_and_recovered_claim(self):
+        self.config = self.config.replace('url = "http://127.0.0.1:8181/replies"', 'directory = "out"')
+        app = self.launch()
+        inbox = self.root / "inbox"
+        partial = inbox / "order.part"
+        partial.write_bytes(self.order[:10])
+        self.assertTrue(partial.exists())
+        with partial.open("ab") as file:
+            file.write(self.order[10:])
+        os.replace(partial, inbox / "order.edi")
+        app.wait("delivered")
+        app.wait("delivered")
+        files = sorted((self.root / "out").glob("*.edi"))
+        self.assertEqual(len(files), 2)
+        self.assertIn(b"UCI+ORDER42", files[0].read_bytes())
+        self.assertIn(b"ORDRSP:D:96A:UN", files[1].read_bytes())
+        app.close()
+        with contextlib.closing(sqlite3.connect(self.db)) as db:
+            claim, raw = db.execute("select claim,bytes from transfers where direction='in'").fetchone()
+            self.assertEqual(raw, self.order)
+        (inbox / f".vendredi-claim-{claim}_order.edi").write_bytes(self.order)
+        app = self.launch()
+        app.command("send", "Supplier", "confirmation.edi")
+        app.wait("delivered")
+        app.close()
+        with contextlib.closing(sqlite3.connect(self.db)) as db:
+            self.assertEqual(db.execute("select count(*) from transfers where direction='in'").fetchone(), (1,))
+        self.assertFalse(list(inbox.glob(".vendredi-claim-*")))
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--binary", type=Path, default=BINARY)
+    args = parser.parse_args()
+    BINARY = args.binary.resolve()
+    unittest.main(argv=["local_instance"], verbosity=2)
