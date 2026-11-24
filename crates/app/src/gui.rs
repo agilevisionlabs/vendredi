@@ -29,10 +29,14 @@ use vendredi_core::{
 };
 
 pub fn run(root: PathBuf) -> Result<()> {
+    let viewport = egui::ViewportBuilder::default()
+        .with_inner_size([1440.0, 860.0])
+        .with_min_inner_size([680.0, 420.0]);
+    // Let AppKit use the bundle icon in the Dock.
+    #[cfg(target_os = "macos")]
+    let viewport = viewport.with_icon(egui::IconData::default());
     let opts = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1440.0, 860.0])
-            .with_min_inner_size([680.0, 420.0]),
+        viewport,
         ..Default::default()
     };
     eframe::run_native(

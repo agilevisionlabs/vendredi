@@ -4,7 +4,7 @@ An EDI simulator for developers: a fake trading partner that runs on your machin
 
 ## Run an exchange
 
-Open the `vendredi` executable. On first launch it creates a sample workspace in the user's home directory under `Vendredi`. Choose **Send sample order** in the empty traffic list or from **Send document…**. Select the inbound transfer or either reply to inspect its raw bytes, validation findings and execution history. The sample supplier writes a `CONTRL` and an `ORDRSP` into the workspace’s `replies` folder.
+On macOS, extract the download, move **Vendredi.app** to Applications, and double-click it in Finder. For CLI commands, use `/Applications/Vendredi.app/Contents/MacOS/vendredi`. On Windows or Linux, open the extracted executable. On first launch it creates a sample workspace in the user's home directory under `Vendredi`. Choose **Send sample order** in the empty traffic list or from **Send document…**. Select the inbound transfer or either reply to inspect its raw bytes, validation findings and execution history. The sample supplier writes a `CONTRL` and an `ORDRSP` into the workspace’s `replies` folder.
 
 The [illustrated workspace handbook](https://vendredi.app/guide/) covers the first exchange, traffic inspection, partner setup, rules, scripts, retries and cleanup. The guide includes full-resolution screenshots and a downloadable starter workspace with the documents and scripts used in the walkthrough. For a quick reference on GitHub, see [traffic search and rule order](docs/guide/traffic-and-rules.md).
 
