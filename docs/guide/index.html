@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Vendredi workspace guide</title><meta name="description" content="An illustrated guide to running local EDIFACT exchanges, configuring trading partners, and testing rules and scripts in Vendredi.">
+<link rel="icon" href="mark.svg" type="image/svg+xml"><link rel="stylesheet" href="handbook.css"><script src="handbook.js" defer></script></head><body>
+<a class="skip" href="#start">Skip to the walkthrough</a>
+<header class="mast"><div class="frame mast-inner"><a class="wordmark" href="#top"><img src="mark.svg" width="34" height="34" alt="">Vendredi</a><span class="mast-label">Documentation</span><a class="mast-action" href="starter-workspace.zip" download>Starter workspace ↓</a></div></header>
+<main id="top">
+<div class="cover"><div class="frame cover-inner"><div><h1>Vendredi<br> <span>workspace guide</span></h1>
+<p>Send a purchase order, trace its acknowledgement, and teach a local trading partner how to reply.</p><div class="cover-actions"><a class="primary" href="#start">Run your first exchange <span aria-hidden="true">→</span></a><a href="#diagnose">Troubleshooting</a></div></div>
+<figure class="cover-figure"><a href="media/traffic.webp" data-title="Inside the Northline exchange" aria-label="Enlarge the purchase order timeline"><span class="crop" style="--ratio:620/310;--scale:232.25806%;--left:-132.25806%;--top:-17.41935%"><img src="media/traffic.webp" width="2880" height="1720" alt="Order PO-1048 accepted. The timeline records the CONTRL, matched rule, ORDRSP and script execution." fetchpriority="high" decoding="async"></span></a><figcaption><span>Northline Supply · Purchase order</span><b>PO-1048</b></figcaption></figure>
+</div></div>
+<details class="nav-mobile"><summary class="frame">Contents</summary><div class="frame"><nav class="contents" aria-label="Guide chapters">
+<a href="#start">First exchange</a>
+<a href="#inspect">Inspect a transfer</a>
+<a href="#search">Search traffic</a>
+<a href="#channels">HTTP and folder intake</a>
+<a href="#partners">Partner setup</a>
+<a href="#rules">Rule order and actions</a>
+<a href="#scripts">JavaScript replies</a>
+<a href="#documents">Document templates</a>
+<a href="#diagnose">Failures and retries</a>
+<a href="#history">History and retention</a>
+<a href="#headless">Headless commands</a>
+</nav></div></details>
+<div class="frame layout"><aside class="sidebar"><h2>In this guide</h2><nav class="contents" aria-label="Guide chapters">
+<a href="#start">First exchange</a>
+<a href="#inspect">Inspect a transfer</a>
+<a href="#search">Search traffic</a>
+<a href="#channels">HTTP and folder intake</a>
+<a href="#partners">Partner setup</a>
+<a href="#rules">Rule order and actions</a>
+<a href="#scripts">JavaScript replies</a>
+<a href="#documents">Document templates</a>
+<a href="#diagnose">Failures and retries</a>
+<a href="#history">History and retention</a>
+<a href="#headless">Headless commands</a>
+</nav></aside><article>
+<section id="start" class="chapter">
+<h2>Run your first exchange</h2>
+<p class="lead">Send one purchase order and follow it all the way to the two reply files on disk.</p>
+<p>Opening Vendredi for the first time creates a sample workspace called <code>Vendredi</code> in your home folder. Its Supplier partner is ready to receive an order. This handbook uses a second, downloadable workspace with two fictional partners, editable scripts and a deliberately invalid order.</p>
+<h3>Open the workspace you want to use</h3>
+<ul><li><strong>If Northline Supply and East Dock Logistics are in your sidebar,</strong> you already have the handbook workspace open. Continue to the order below.</li><li><strong>If you see Supplier,</strong> you can send the bundled sample immediately. To follow every example here, <a href="starter-workspace.zip" download>download the starter files</a>, extract them into a separate folder, then open that folder with Vendredi.</li></ul>
+<div class="snippet"><header><span>Terminal · from the folder containing the executable</span></header><pre><code>./vendredi gui ./vendredi-starter</code></pre></div>
+<p>On Windows use <code>.&#92;vendredi.exe gui .&#92;vendredi-starter</code>. If you extracted the folder elsewhere, substitute its path. The downloadable workspace starts with an empty history. Running the exercises creates the transfers shown here.</p>
+<h3>Submit the carton order</h3>
+<ol><li>Look for <strong>Running</strong> in the top bar. In the sidebar select <strong>Northline Supply</strong>, then choose <strong>Send document…</strong>.</li><li>Check the partner at the top of the dialog. Choose <strong>Send sample order</strong> at the lower left. This submits <code>order.edi</code> through the partner’s intake. The separate <strong>Send</strong> button initiates an outbound document or script for that partner.</li><li>Open <strong>All traffic</strong>. Select the inbound <strong>ORDERS</strong> with reference <code>PO-1048</code>. Its status should be <strong>Accepted</strong>. Look for two outbound rows marked <strong>Delivered</strong>.</li></ol>
+<figure class="shot"><a href="media/send.webp" data-title="Send a sample order" aria-label="Enlarge screenshot: Send a sample order"><span class="crop" style="--ratio:558/365;--scale:258.06452%;--left:-78.85305%;--top:-67.94521%"><img src="media/send.webp" width="2880" height="1720" alt="Northline is selected. Send sample order submits the inbound fixture. Send initiates the selected outbound file." loading="lazy" decoding="async"></span></a><figcaption><span>Northline is selected. Send sample order submits the inbound fixture. Send initiates the selected outbound file.</span><span class="enlarge" aria-hidden="true">Enlarge ↗</span></figcaption></figure>
+<p>Open <code>replies</code> inside the workspace. The CONTRL acknowledges the incoming interchange. The ORDRSP confirms the purchase order and contains <code>RFF+ON:PO-1048'</code>. Filenames use the local transfer ID, so the numbers depend on the traffic you have already sent.</p>
+</section>
+<section id="inspect" class="chapter">
+<h2>Read a transfer</h2>
+<p class="lead">Each row is one transmission. The timeline brings the incoming order, its rule, and the replies back together.</p>
+<figure class="shot"><a href="media/traffic.webp" data-title="The traffic workspace" aria-label="Enlarge screenshot: The traffic workspace"><span class="crop" style="--ratio:1440/585;--scale:100.00000%;--left:0.00000%;--top:0.00000%"><img src="media/traffic.webp" width="2880" height="1720" alt="The left pane lists transfers. The selected PO-1048 order opens its processing timeline and raw segments on the right." loading="lazy" decoding="async"></span></a><figcaption><span>The left pane lists transfers. The selected PO-1048 order opens its processing timeline and raw segments on the right.</span><span class="enlarge" aria-hidden="true">Enlarge ↗</span></figcaption></figure>
+<ol><li>In the header, read the message type and directory. <strong>ORDERS · D.96A</strong> identifies the order message. The source line shows its direction, partner, time, intake channel and size.</li><li>Read <strong>What happened</strong> from top to bottom. Select a reply reference to inspect its outbound transfer. Select a rule or script link to open the configuration responsible for that step.</li><li>In <strong>Message</strong>, select a segment to mark the line. <strong>Copy raw</strong> copies the interchange text. On a small window, select a traffic row to open the full inspector, expand <strong>Show timeline</strong> when needed, and use <strong>Back to traffic</strong> to return.</li></ol>
+<div class="table-box"><table><thead><tr><th>Segment in PO-1048</th><th>What to check</th></tr></thead><tbody>
+<tr><td><code>UNB</code> / <code>UNZ</code></td><td>The interchange envelope. UNB identifies BUYER and SUPPLIER and supplies the interchange reference. UNZ repeats that reference.</td></tr>
+<tr><td><code>UNH</code> / <code>UNT</code></td><td>The individual message. The header declares ORDERS:D:96A:UN. The trailer declares seven segments, counting both UNH and UNT.</td></tr>
+<tr><td><code>BGM</code></td><td>The business document number is PO-1048. The script reads it when building the confirmation.</td></tr>
+<tr><td><code>LIN</code>, <code>IMD</code>, <code>QTY</code></td><td>The line identifies CTN-40, describes a recycled shipping carton and requests 120 pieces.</td></tr>
+</tbody></table></div>
+<p><strong>Findings</strong> gives validation details and byte offsets. <strong>Script log</strong> shows messages recorded by the rule’s JavaScript. <strong>Transport</strong> shows the stored file or HTTP metadata. Start with the tab that answers your question.</p>
+</section>
+<section id="search" class="chapter">
+<h2>Find the right traffic</h2>
+<p>Search checks the displayed local time, direction, partner, message type, interchange reference, status and raw message text. It ignores case and treats punctuation literally. While you type, the desktop keeps the last results visible until the new matches arrive.</p>
+<figure class="shot"><a href="media/search-partner.webp" data-title="Search by partner" aria-label="Enlarge screenshot: Search by partner"><span class="crop" style="--ratio:622/525;--scale:231.51125%;--left:-32.15434%;--top:-9.90476%"><img src="media/search-partner.webp" width="2880" height="1720" alt="Northline is highlighted in the Partner column on every matching transfer." loading="lazy" decoding="async"></span></a><figcaption><span>Northline is highlighted in the Partner column on every matching transfer.</span><span class="enlarge" aria-hidden="true">Enlarge ↗</span></figcaption></figure>
+<div class="table-box"><table><thead><tr><th>Try this</th><th>What it finds</th></tr></thead><tbody>
+<tr><td><code>Northline</code></td><td>Transfers showing Northline Supply in the Partner column.</td></tr>
+<tr><td><code>PO-1048</code></td><td>The order and any reply that contains its reference, even when the reply has its own interchange reference.</td></tr>
+<tr><td><code>shipping carton</code></td><td>Item descriptions in the order and quotation. Select a result and open Message to see the matching characters.</td></tr>
+<tr><td><code>BGM+220</code></td><td>The literal EDIFACT fragment, including the plus sign.</td></tr>
+<tr><td><code>Delivered</code> or a time such as <code>14:47</code></td><td>Displayed status or local time. Use a time from your own table when reproducing this search.</td></tr>
+</tbody></table></div>
+<figure class="shot"><a href="media/search-content.webp" data-title="Search inside EDIFACT" aria-label="Enlarge screenshot: Search inside EDIFACT"><span class="crop" style="--ratio:1240/526;--scale:116.12903%;--left:-16.12903%;--top:-9.88593%"><img src="media/search-content.webp" width="2880" height="1720" alt="The selected order contains “shipping carton” in its IMD segment. The quotation and the rejected order also contain the phrase." loading="lazy" decoding="async"></span></a><figcaption><span>The selected order contains “shipping carton” in its IMD segment. The quotation and the rejected order also contain the phrase.</span><span class="enlarge" aria-hidden="true">Enlarge ↗</span></figcaption></figure>
+<p>For incoming orders from one partner, select the partner, set <strong>Direction → In</strong>, then search for <code>ORDERS</code>. Use <strong>Status</strong> to narrow the set further. Clear the search field to keep the filters. If the result is empty, <strong>Clear filters</strong> resets the search, direction and status. Select <strong>All traffic</strong> to leave a partner or attention view.</p>
+</section>
+<section id="channels" class="chapter">
+<h2>Send over HTTP or a folder</h2>
+<p class="lead">Choose the channel your integration actually uses. Both transports feed the same rules and produce inspectable exchanges.</p>
+<h3>Post directly to Northline</h3>
+<p>Run this from the handbook workspace while its listener is running. The starter listens on port 8980. The bundled Supplier example defaults to 8180. Check the top bar or <strong>Settings</strong> for the address of your instance.</p>
+<div class="snippet"><header><span>Terminal · submit the original bytes</span></header><pre><code>curl -i --data-binary "@order.edi" -H "Content-Type: application/edifact" http://127.0.0.1:8980/supplier/orders</code></pre></div>
+<p>A normal HTTP receipt is <strong>202</strong>. The business response follows the partner’s reply channel. For Northline, inspect the two outbound rows and their files in <code>replies</code>. On Windows use <code>curl.exe</code> with the same arguments.</p>
+<h3>Receive a consignment at East Dock</h3>
+<p>From the workspace, publish <code>samples/dispatch-cartons.edi</code> to the warehouse inbox. Copy under a temporary extension and rename the finished file in the same directory. East Dock watches for <code>.edi</code> and claims the file when it is ready.</p>
+<div class="snippet"><header><span>macOS / Linux</span></header><pre><code>cp samples/dispatch-cartons.edi dock/inbox/arrival.part
+mv dock/inbox/arrival.part dock/inbox/arrival.edi</code></pre></div>
+<div class="snippet"><header><span>Windows PowerShell</span></header><pre><code>Copy-Item samples/dispatch-cartons.edi dock/inbox/arrival.part
+Rename-Item dock/inbox/arrival.part arrival.edi</code></pre></div>
+<figure class="shot"><a href="media/warehouse.webp" data-title="Inspect a warehouse receipt" aria-label="Enlarge screenshot: Inspect a warehouse receipt"><span class="crop" style="--ratio:1243/496;--scale:115.84875%;--left:-15.84875%;--top:-11.08871%"><img src="media/warehouse.webp" width="2880" height="1720" alt="East Dock’s ASN-806 dispatch triggered Receive dispatch advice and produced a CONTRL and a RECADV." loading="lazy" decoding="async"></span></a><figcaption><span>East Dock’s ASN-806 dispatch triggered Receive dispatch advice and produced a CONTRL and a RECADV.</span><span class="enlarge" aria-hidden="true">Enlarge ↗</span></figcaption></figure>
+<p>Select <strong>East Dock Logistics</strong>. The DESADV row has reference <code>ASN-806</code>. The rule logs the consignment and sends a RECADV with <code>RFF+AAK:ASN-806'</code>. Its CONTRL and RECADV files appear in <code>dock/receipts</code>. The original sample remains in <code>samples</code> for another run.</p>
+</section>
+<section id="partners" class="chapter">
+<h2>Configure a partner</h2>
+<p>Choose <strong>+ Add partner</strong> to model another trading partner. For an existing partner, select its name in the sidebar and choose <strong>Edit partner</strong>. Saving the form updates <code>vendredi.toml</code> and reloads the workspace.</p>
+<figure class="shot"><a href="media/edit.webp" data-title="Configure intake and reply channels" aria-label="Enlarge screenshot: Configure intake and reply channels"><span class="crop" style="--ratio:653/724;--scale:220.52067%;--left:-60.18377%;--top:-9.11602%"><img src="media/edit.webp" width="2880" height="1720" alt="Northline accepts an HTTP path and a watched folder. Both inputs share one folder for replies." loading="lazy" decoding="async"></span></a><figcaption><span>Northline accepts an HTTP path and a watched folder. Both inputs share one folder for replies.</span><span class="enlarge" aria-hidden="true">Enlarge ↗</span></figcaption></figure>
+<div class="table-box"><table><thead><tr><th>Control</th><th>What to enter</th></tr></thead><tbody>
+<tr><td>Partner name</td><td>A distinct name for the sidebar and traffic history. Northline Supply is the display name.</td></tr>
+<tr><td>EDIFACT identifier</td><td>The recipient of your inbound interchange. For Northline the identifier is SUPPLIER and its qualifier is ZZ. Your workspace’s sending identity is BUYER · ZZ.</td></tr>
+<tr><td>EDIFACT settings</td><td>Choose Always, When requested, or Never for automatic acknowledgements. Set the character set and separators to match your integration.</td></tr>
+<tr><td>Intake channels</td><td>Add an HTTP path, a watched folder, or both. A folder has a suffix. A relative folder resolves under the workspace, and the form shows its full path.</td></tr>
+<tr><td>Reply channel</td><td>Choose a folder for local files or HTTP for delivery to your receiver. For HTTP, supply its URL and any headers it requires.</td></tr>
+</tbody></table></div>
+<p>Keep the incoming and outgoing directories distinct. For a new setup, send one interchange with the configured sender and recipient, then verify the transport metadata on both rows. To remove a partner, use the red <strong>Remove partner</strong> action beside Edit and confirm the name. At least one partner must remain. Its recorded exchanges are managed separately in <a href="#history">traffic history</a>.</p>
+</section>
+<section id="rules" class="chapter">
+<h2>Order the rules</h2>
+<p>Open <strong>Rules</strong>. Each partner has its own ordered list. Vendredi evaluates the inbound message type, optional version and optional release, then runs the first rule that matches. Put specific matches above broader ones.</p>
+<figure class="shot"><a href="media/rules.webp" data-title="Compare partner rule priorities" aria-label="Enlarge screenshot: Compare partner rule priorities"><span class="crop" style="--ratio:851/416;--scale:169.21269%;--left:-23.73678%;--top:-12.74038%"><img src="media/rules.webp" width="2880" height="1720" alt="Northline has two rules. East Dock has its own first match. Read across the aligned columns to compare the match and action count." loading="lazy" decoding="async"></span></a><figcaption><span>Northline has two rules. East Dock has its own first match. Read across the aligned columns to compare the match and action count.</span><span class="enlarge" aria-hidden="true">Enlarge ↗</span></figcaption></figure>
+<ol><li>Open <strong>Confirm purchase orders</strong>. The match is <code>ORDERS</code>, version <code>D</code>, release <code>96A</code>. Leave an optional field blank when the rule should accept any value for that field.</li><li>Use <strong>Match order</strong> to change priority within this partner. The position of a rule and the order of the actions inside it control different things.</li><li>Under <strong>Actions</strong>, choose <strong>+ Add action</strong>. A rule can send a document, run a script, delay the next action, or simulate a fault. Arrange the actions in the sequence your test needs.</li><li>Choose <strong>Save rule</strong>. Submit the relevant sample and open <strong>Rule matched</strong> in its timeline to verify which rule actually ran.</li></ol>
+<figure class="shot"><a href="media/rule.webp" data-title="Edit a rule and its actions" aria-label="Enlarge screenshot: Edit a rule and its actions"><span class="crop" style="--ratio:625/626;--scale:230.40000%;--left:-65.28000%;--top:-18.37061%"><img src="media/rule.webp" width="2880" height="1720" alt="Confirm purchase orders matches ORDERS D.96A, runs first, and invokes confirmOrder." loading="lazy" decoding="async"></span></a><figcaption><span>Confirm purchase orders matches ORDERS D.96A, runs first, and invokes confirmOrder.</span><span class="enlarge" aria-hidden="true">Enlarge ↗</span></figcaption></figure>
+<div class="note"><p><strong>Try a timing test.</strong> In a disposable copy of the starter, add a short delay before the confirmation script. Send a new order and watch the outbound confirmation arrive after the delay. Keep the engine running until it finishes.</p></div>
+</section>
+<section id="scripts" class="chapter">
+<h2>Make replies depend on input</h2>
+<p>Use a script when the reply needs data from the incoming message or a value that persists across exchanges. Open <strong>Scripts</strong> and select <code>scripts/confirm-order.js</code>, or follow the script link in PO-1048’s timeline.</p>
+<figure class="shot"><a href="media/script.webp" data-title="Edit a JavaScript action" aria-label="Enlarge screenshot: Edit a JavaScript action"><span class="crop" style="--ratio:737/580;--scale:195.38670%;--left:-47.89688%;--top:-23.96552%"><img src="media/script.webp" width="2880" height="1720" alt="The editor shows the workspace filename, entry function, source and the rule that invokes it." loading="lazy" decoding="async"></span></a><figcaption><span>The editor shows the workspace filename, entry function, source and the rule that invokes it.</span><span class="enlarge" aria-hidden="true">Enlarge ↗</span></figcaption></figure>
+<p>In the starter, <code>confirmOrder</code> reads the BGM document number and increments the partner’s <code>confirmedOrders</code> counter. It logs the incoming order number and builds an ORDRSP that points back to it. The receipt script maintains a separate counter for East Dock.</p>
+<div class="snippet"><header><span>JavaScript · a standalone manual-send example</span></header><pre><code>function sendConfirmation(interchange, api) {
+    const count = (api.get("demoConfirmations") || 0) + 1;
+    api.set("demoConfirmations", count);
+    api.log("Created manual confirmation " + count);
+    api.send(api.build("ORDRSP:D:96A:UN",
+        "BGM+231+DEMO-" + count + "+29'"));
+}</code></pre></div>
+<p>To try it, use <strong>Scripts → Add script</strong>, select a partner and rule, enter a new workspace filename and the function name <code>sendConfirmation</code>, paste the source, and save. That attaches an action to the rule. To exercise it immediately, choose <strong>Send document… → JavaScript</strong>, select the same partner and configured script, then choose <strong>Send</strong>. For a manual send the interchange argument is <code>null</code>. A rule invocation receives the parsed interchange.</p>
+<figure class="shot"><a href="media/log.webp" data-title="Read a script log" aria-label="Enlarge screenshot: Read a script log"><span class="crop" style="--ratio:622/391;--scale:231.51125%;--left:-131.51125%;--top:-13.29923%"><img src="media/log.webp" width="2880" height="1720" alt="Script log contains the order number written by confirmOrder during the selected inbound exchange." loading="lazy" decoding="async"></span></a><figcaption><span>Script log contains the order number written by confirmOrder during the selected inbound exchange.</span><span class="enlarge" aria-hidden="true">Enlarge ↗</span></figcaption></figure>
+<div class="table-box"><table><thead><tr><th>Script API</th><th>Use</th></tr></thead><tbody>
+<tr><td><code>api.log(text)</code></td><td>Write a line that the operator can read in Script log.</td></tr>
+<tr><td><code>api.get(key)</code>, <code>api.set(key, value)</code></td><td>Read and write persistent state scoped to this partner.</td></tr>
+<tr><td><code>api.build(type, body)</code>, <code>api.send(message)</code></td><td>Build a message and enqueue it for the partner’s reply channel. Vendredi builds the interchange envelope and segment counts.</td></tr>
+<tr><td><code>api.contrl()</code></td><td>Request an acknowledgement while processing an inbound interchange.</td></tr>
+<tr><td><code>api.nextReference()</code>, <code>api.now()</code></td><td>Allocate a partner reference or read the current time in Unix milliseconds.</td></tr>
+</tbody></table></div>
+<p>When embedding an incoming field in EDIFACT, escape service characters. The starter scripts show this for their standard separators. <strong>Detach from rule</strong> removes the binding after confirmation and keeps the source file.</p>
+</section>
+<section id="documents" class="chapter">
+<h2>Edit a repeatable document</h2>
+<p>Use a static document when every matching request should receive the same message body. Northline’s <strong>Quote packing supplies</strong> rule answers a REQOTE with a QUOTES message for 100 cartons at EUR 2.40 each.</p>
+<figure class="shot"><a href="media/documents.webp" data-title="Inspect the quotation template" aria-label="Enlarge screenshot: Inspect the quotation template"><span class="crop" style="--ratio:1053/290;--scale:136.75214%;--left:-19.46819%;--top:-18.62069%"><img src="media/documents.webp" width="2880" height="1720" alt="The QUOTES template includes the currency, item, quantity and price. The editor saves and reloads the workspace." loading="lazy" decoding="async"></span></a><figcaption><span>The QUOTES template includes the currency, item, quantity and price. The editor saves and reloads the workspace.</span><span class="enlarge" aria-hidden="true">Enlarge ↗</span></figcaption></figure>
+<ol><li>Open <strong>Documents</strong> and select <code>documents/packing-supplies-quote.edi</code>. The file contains one message from UNH to UNT using the default separators.</li><li>In a test copy, change <code>PRI+AAA:2.40'</code> to <code>PRI+AAA:2.55'</code>. Choose <strong>Save and reload</strong>. The editor also supports Latin-1 text.</li><li>Publish <code>samples/quote-request.edi</code> to Northline’s <code>inbox</code> with the temporary-name technique from <a href="#channels">folder intake</a>. Open the outbound QUOTES row and verify the new price in Message.</li></ol>
+<p><strong>Discard edits</strong> loads the last saved file. With a clean editor, <strong>Reload file</strong> reads external changes. If saving reports an invalid document or a conflict, review the error and reconcile the draft with the file on disk.</p>
+</section>
+<section id="diagnose" class="chapter">
+<h2>Diagnose and retry</h2>
+<p>Use <strong>Needs attention</strong> for a short list of exchanges that need investigation. To reproduce the handbook’s rejected order, publish <code>samples/order-bad-count.edi</code> to Northline’s inbox. Select PO-1046 and open <strong>Findings</strong>.</p>
+<figure class="shot"><a href="media/findings.webp" data-title="Investigate a rejected order" aria-label="Enlarge screenshot: Investigate a rejected order"><span class="crop" style="--ratio:621/322;--scale:231.88406%;--left:-131.88406%;--top:-16.77019%"><img src="media/findings.webp" width="2880" height="1720" alt="PO-1046 has one message_trailer finding. The Findings tab reports the UNT count or reference mismatch." loading="lazy" decoding="async"></span></a><figcaption><span>PO-1046 has one message_trailer finding. The Findings tab reports the UNT count or reference mismatch.</span><span class="enlarge" aria-hidden="true">Enlarge ↗</span></figcaption></figure>
+<div class="table-box"><table><thead><tr><th>What you see</th><th>Next check</th></tr></thead><tbody>
+<tr><td>Rejected · 1 finding</td><td>Read the finding and offset. PO-1046 declares 99 segments in UNT. Count UNH through UNT, then compare with the valid seven-segment PO-1048. Submit corrected bytes as a new input.</td></tr>
+<tr><td>No rule matched</td><td>Compare the UNH message type, version and release with the partner’s ordered rules. Open the relevant rule, save the correction and replay the inbound transfer.</td></tr>
+<tr><td>Action failed</td><td>Inspect the execution timeline and script log. Check the configured file, entry function, and returned EDIFACT message before replaying.</td></tr>
+<tr><td>Delivery failed or interrupted</td><td>Open Transport. Restore the receiver or folder, then choose Resend on the outbound transfer. Inspect the new attempt and its destination.</td></tr>
+</tbody></table></div>
+<p><strong>Replay</strong> feeds the original inbound bytes through the current rules as a new transfer. This can generate additional replies and advance script counters. <strong>Resend</strong> repeats an outbound transfer using its recorded bytes. Choose the operation according to which side of the exchange you want to exercise.</p>
+<details class="faq"><summary>HTTP returned 202, but I have no business reply</summary><p>Start with the inbound row. Read Findings and Rule matched, then look for an outbound row with a delivery failure. For the starter supplier, the reply destination is a folder. The HTTP receipt and the business reply are separate steps.</p></details>
+<details class="faq"><summary>A file is still sitting in my watched folder</summary><p>Check Running, the selected partner’s resolved intake path and the suffix on the completed filename. A .part file stays there until you rename it to the configured suffix. Check that you copied the full incoming interchange, including UNB and UNZ.</p></details>
+<details class="faq"><summary>The listener starts stopped</summary><p>Read the status message, then inspect the HTTP listener in Settings. If another process owns the port, close that listener or save a free port and choose Start. If another Vendredi instance owns the same workspace, close that instance before retrying.</p></details>
+</section>
+<section id="history" class="chapter">
+<h2>Manage workspace history</h2>
+<p><strong>Settings → Edit settings</strong> controls the HTTP listener, local EDIFACT identity and retention. The workspace path at the top is the base for relative channel folders and files. The local engine stores traffic in <code>.vendredi/vendredi.db</code>. To back up an entire workspace, close Vendredi and copy the whole directory, including its hidden files, configuration, documents and scripts.</p>
+<figure class="shot"><a href="media/settings.webp" data-title="Read workspace settings" aria-label="Enlarge screenshot: Read workspace settings"><span class="crop" style="--ratio:613/250;--scale:234.91028%;--left:-32.78956%;--top:-21.20000%"><img src="media/settings.webp" width="2880" height="1720" alt="The workspace summary shows the listener on port 8980, BUYER · ZZ and 30 days of traffic retention." loading="lazy" decoding="async"></span></a><figcaption><span>The workspace summary shows the listener on port 8980, BUYER · ZZ and 30 days of traffic retention.</span><span class="enlarge" aria-hidden="true">Enlarge ↗</span></figcaption></figure>
+<p>Retention removes old history when the workspace opens. Shortening the period in Settings asks for confirmation before applying it. For a recent test run, choose <strong>Traffic → Clear history…</strong> instead.</p>
+<figure class="shot"><a href="media/cleanup.webp" data-title="Clear recent exchanges" aria-label="Enlarge screenshot: Clear recent exchanges"><span class="crop" style="--ratio:535/366;--scale:269.15888%;--left:-84.67290%;--top:-67.75956%"><img src="media/cleanup.webp" width="2880" height="1720" alt="Review the partner and relative time period before clearing the selected history." loading="lazy" decoding="async"></span></a><figcaption><span>Review the partner and relative time period before clearing the selected history.</span><span class="enlarge" aria-hidden="true">Enlarge ↗</span></figcaption></figure>
+<ol><li>Select <strong>All partners</strong> or a single partner. A partner you removed is available with <strong>(removed)</strong> while its transfers still exist.</li><li>Choose <strong>Last minute</strong>, <strong>Last hour</strong>, <strong>Last day</strong> or <strong>Last week</strong>. The age of the <em>last transfer</em> determines whether the whole exchange falls in the window.</li><li>Review both selections, then choose the red <strong>Clear history</strong>. The footer reports how many exchanges were cleared. Pending deliveries and scheduled actions are skipped.</li></ol>
+<p>Cleanup preserves partner counters and script state. Files already delivered into reply folders remain there. Use a separate workspace when you want independent counters, configuration and traffic for another scenario.</p>
+</section>
+<section id="headless" class="chapter">
+<h2>Use the same workspace headless</h2>
+<p>The desktop and command-line runner use the same files, rules, scripts and persistent history. Close the desktop for that workspace before starting headless mode. From the folder containing the executable and the extracted starter, run:</p>
+<div class="snippet"><header><span>Terminal · start the engine</span></header><pre><code>./vendredi run --headless ./vendredi-starter</code></pre></div>
+<p>The runner prints a JSON ready event and subsequent events one per line. Submit the HTTP sample from another terminal, or publish a file to an intake folder. While the runner owns the workspace, enter commands on its standard input. Use a JSON array when arguments contain spaces.</p>
+<div class="snippet"><header><span>Headless standard input · enter each line separately</span></header><pre><code>["send", "Northline Supply", "documents/packing-supplies-quote.edi"]
+["send", "Northline Supply", "scripts/confirm-order.js", "confirmOrder"]
+quit</code></pre></div>
+<p>With the workspace closed, use a transfer ID from your own run for a one-shot inspection. The last command reopens the desktop on the resulting history.</p>
+<div class="snippet"><header><span>Terminal · inspect and reopen</span></header><pre><code>./vendredi inspect ./vendredi-starter 1
+./vendredi gui ./vendredi-starter</code></pre></div>
+<div class="note"><p><strong>Start a clean bundled example.</strong> Run <code>./vendredi init ./demo</code> and <code>./vendredi gui ./demo</code> to create and open the single-Supplier sample. Keep the illustrated starter available for tests that need multiple partners or JavaScript state.</p></div>
+</section>
+
+</article></div></main>
+<footer class="end frame"><span>Vendredi · Workspace guide</span><a href="#top">Back to top ↑</a></footer>
+<dialog aria-labelledby="viewer-title"><header><h2 id="viewer-title">Screenshot</h2><div class="actions"><button id="zoom" type="button" aria-pressed="false">Actual pixels</button><button id="close" type="button">Close</button></div></header><div class="viewer" tabindex="0" aria-label="Scrollable screenshot"><img width="2880" height="1720" alt=""></div><p class="viewer-note"></p></dialog>
+</body></html>

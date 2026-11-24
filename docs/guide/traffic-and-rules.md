@@ -1,5 +1,7 @@
 # Find traffic and inspect its rules
 
+For the complete walkthrough with full-resolution screenshots, open the [workspace handbook](index.html).
+
 ## Search the traffic table
 
 Open **All traffic** and type in **Search traffic and message text**. A transfer appears when any table field or its message body contains the search text. Search ignores case and treats punctuation literally, so you can search for EDIFACT fragments such as `BGM+220`.
