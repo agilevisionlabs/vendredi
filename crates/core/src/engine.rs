@@ -61,6 +61,25 @@ pub struct TrafficRow {
     pub attention: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HistoryPeriod {
+    Minute,
+    Hour,
+    Day,
+    Week,
+}
+
+impl HistoryPeriod {
+    fn milliseconds(self) -> i64 {
+        match self {
+            Self::Minute => 60_000,
+            Self::Hour => 3_600_000,
+            Self::Day => 86_400_000,
+            Self::Week => 7 * 86_400_000,
+        }
+    }
+}
+
 pub struct Engine {
     pub workspace: Workspace,
     store: Store,
@@ -115,20 +134,62 @@ impl Engine {
     }
     fn prune(&mut self) -> Result<()> {
         let cutoff = self.clock.millis() - i64::from(self.workspace.retention_days) * 86_400_000;
-        self.store.transaction(|s|{
-            let roots="SELECT root FROM transfers GROUP BY root HAVING MAX(time) < ?";
-            let transfers=format!("SELECT id FROM transfers WHERE root IN ({roots})");
-            for sql in [
-                format!("DELETE FROM events WHERE json_extract(body,'$.root') IN ({roots})"),
-                format!("DELETE FROM events WHERE json_extract(body,'$.root') IS NULL AND json_extract(body,'$.execution') IN (SELECT id FROM executions WHERE root IN ({roots}))"),
-                format!("DELETE FROM findings WHERE transfer IN ({transfers})"),
-                format!("DELETE FROM messages WHERE interchange IN (SELECT id FROM interchanges WHERE transfer IN ({transfers}))"),
-                format!("DELETE FROM interchanges WHERE transfer IN ({transfers})"),
-                format!("DELETE FROM executions WHERE root IN ({roots})"),
-                format!("DELETE FROM transfers WHERE root IN ({roots})"),
-            ] {s.exec(&sql,[cutoff])?;}
-            Ok(())
+        self.store.transaction(|s| {
+            Self::delete_exchanges(
+                s,
+                "SELECT root FROM transfers GROUP BY root HAVING MAX(time) < ?",
+                [cutoff],
+            )
         })
+    }
+
+    pub fn clear_history(&mut self, period: HistoryPeriod, partner: Option<&str>) -> Result<usize> {
+        let end = self.clock.millis();
+        let start = end.saturating_sub(period.milliseconds());
+        let delayed: Vec<_> = self.pending.values().filter_map(|t| t.root).collect();
+        let delayed = serde_json::to_string(&delayed)?;
+        let roots = "SELECT root FROM transfers
+            WHERE root NOT IN (SELECT value FROM json_each(?4))
+            GROUP BY root
+            HAVING MAX(time) BETWEEN ?1 AND ?2 AND MAX(status = 'pending') = 0
+              AND (?3 IS NULL OR (MIN(partner) = ?3 AND MAX(partner) = ?3))";
+        let params = (start, end, partner, delayed.as_str());
+        self.store.transaction(|s| {
+            let matching = s
+                .query(roots, params)?
+                .iter()
+                .map(|row| row.get::<i64>(0))
+                .collect::<turso::Result<Vec<_>>>()?;
+            if !matching.is_empty() {
+                let ids = serde_json::to_string(&matching)?;
+                Self::delete_exchanges(s, "SELECT value FROM json_each(?)", [ids.as_str()])?;
+            }
+            Ok(matching.len())
+        })
+    }
+
+    fn delete_exchanges(
+        s: &Store,
+        roots: &str,
+        params: impl turso::IntoParams + Clone,
+    ) -> Result<()> {
+        let transfers = format!("SELECT id FROM transfers WHERE root IN ({roots})");
+        for sql in [
+            format!("DELETE FROM events WHERE json_extract(body,'$.root') IN ({roots})"),
+            format!(
+                "DELETE FROM events WHERE json_extract(body,'$.root') IS NULL AND json_extract(body,'$.execution') IN (SELECT id FROM executions WHERE root IN ({roots}))"
+            ),
+            format!("DELETE FROM findings WHERE transfer IN ({transfers})"),
+            format!(
+                "DELETE FROM messages WHERE interchange IN (SELECT id FROM interchanges WHERE transfer IN ({transfers}))"
+            ),
+            format!("DELETE FROM interchanges WHERE transfer IN ({transfers})"),
+            format!("DELETE FROM executions WHERE root IN ({roots})"),
+            format!("DELETE FROM transfers WHERE root IN ({roots})"),
+        ] {
+            s.exec(&sql, params.clone())?;
+        }
+        Ok(())
     }
     fn event(&mut self, kind: &str, root: Option<i64>, detail: Value) -> Result<()> {
         let mut v = detail;
@@ -837,6 +898,79 @@ mod tests {
         );
         Ok(())
     }
+    #[test]
+    fn clear_history_uses_latest_transfer_and_skips_active_exchanges() -> Result<()> {
+        let (_dir, mut w) = fixture()?;
+        let mut other = w.partners[0].clone();
+        other.name = "Other".into();
+        w.partners.push(other);
+        let clock = Arc::new(Manual(AtomicI64::new(0)));
+        let mut e = Engine::open(w, clock.clone())?;
+        let old = input(&mut e, 0, ORDER)?;
+        let spanning = input(&mut e, 0, ORDER)?;
+        let replies = e.take_deliveries();
+        for d in &replies {
+            e.finish_delivery(d.id, Ok(String::new()))?;
+        }
+        clock.0.store(100_000, Ordering::SeqCst);
+        e.resend(replies.last().unwrap().id)?;
+        let resend = e.take_deliveries().pop().unwrap().id;
+        e.finish_delivery(resend, Ok(String::new()))?;
+        let invalid = input(&mut e, 0, b"bad")?;
+        let other = input(&mut e, 1, b"bad")?;
+        let in_flight = input(&mut e, 0, ORDER)?;
+        assert!(!e.take_deliveries().is_empty()); // Leave this exchange awaiting delivery.
+        e.workspace.partners[0].rules[0].actions = vec![Action::Delay { delay_ms: 180_000 }];
+        let delayed = input(&mut e, 0, ORDER)?;
+        for d in e.take_deliveries() {
+            e.finish_delivery(d.id, Ok(String::new()))?;
+        }
+        clock.0.store(160_000, Ordering::SeqCst);
+        assert_eq!(e.clear_history(HistoryPeriod::Minute, Some("Supplier"))?, 2);
+        for id in [spanning, resend, invalid] {
+            assert!(e.detail(id).is_err());
+        }
+        for id in [old, other, in_flight, delayed] {
+            assert!(e.detail(id).is_ok());
+        }
+        assert!(
+            e.history(500)?
+                .iter()
+                .all(|e| e["root"] != spanning && e["root"] != invalid)
+        );
+        assert_eq!(e.clear_history(HistoryPeriod::Minute, Some("Supplier"))?, 0);
+        assert_eq!(e.clear_history(HistoryPeriod::Week, None)?, 2);
+        assert!(e.detail(delayed).is_ok());
+        assert!(e.detail(in_flight).is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn clear_history_ranges_include_boundary_and_removed_partner() -> Result<()> {
+        for (period, span) in [
+            (HistoryPeriod::Minute, 60_000),
+            (HistoryPeriod::Hour, 3_600_000),
+            (HistoryPeriod::Day, 86_400_000),
+            (HistoryPeriod::Week, 604_800_000),
+        ] {
+            let (_dir, w) = fixture()?;
+            let clock = Arc::new(Manual(AtomicI64::new(0)));
+            let mut engine = Engine::open(w, clock.clone())?;
+            let older = input(&mut engine, 0, b"old")?;
+            clock.0.store(1, Ordering::SeqCst);
+            let boundary = input(&mut engine, 0, b"boundary")?;
+            clock.0.store(span + 2, Ordering::SeqCst);
+            let future = input(&mut engine, 0, b"future")?;
+            engine.workspace.partners[0].name = "Replacement".into();
+            clock.0.store(span + 1, Ordering::SeqCst);
+            assert_eq!(engine.clear_history(period, Some("Supplier"))?, 1);
+            assert!(engine.detail(boundary).is_err());
+            assert!(engine.detail(older).is_ok());
+            assert!(engine.detail(future).is_ok());
+        }
+        Ok(())
+    }
+
     #[test]
     fn partner_delay_script_state_and_faults_are_isolated() -> Result<()> {
         let (dir, mut w) = fixture()?;
