@@ -1,6 +1,6 @@
 # Architecture
 
-High-level architecture of Vendredi. Goals and non-goals are in [README.md](README.md). Dependency choices are deliberately not made here, with two exceptions: the script engine is Boa and the embedded store is SQLite.
+High-level architecture of Vendredi. Goals and non-goals are in [README.md](README.md). Dependency choices are deliberately not made here, with two exceptions: the script engine is Boa and the embedded store is Turso, a SQLite-compatible database written in Rust.
 
 ## Shape
 
@@ -67,7 +67,7 @@ An append-only record of everything received, decided and sent. The GUI traffic 
 ## Workspace on disk
 
 - **Configuration is plain text files** (partners, rules, scripts, static documents) in a directory that can be committed next to the integration code. The GUI is an editor for those files, and CI runs the same directory headless.
-- **Everything recorded lives in one SQLite database**, `.vendredi/vendredi.db` inside the workspace: traffic history and per-partner state. It is not meant to be committed. SQLite is compiled into the binary, so there is nothing to install.
+- **Everything recorded lives in one database file**, `.vendredi/vendredi.db` inside the workspace: traffic history and per-partner state. It is not meant to be committed. The engine is Turso, compiled into the binary, so there is nothing to install. The file is in SQLite format, so any SQLite tool can open it.
 
 ## Data model
 
@@ -95,7 +95,7 @@ Workspace                             Transfer ──< Interchange ──< Messa
 | Script | A JavaScript file and the function to call |
 | Document | A static EDIFACT file |
 
-### Recorded (SQLite)
+### Recorded (database)
 
 | Entity | Holds |
 |---|---|
@@ -153,3 +153,4 @@ These were proposed but not yet confirmed.
 
 - Whether Boa, with its Unicode data, fits the 30 MB binary target alongside egui.
 - Whether Boa's runtime limits are enough to stop a script that hangs.
+- Whether Turso, which is still pre-1.0, is stable enough for our use. The storage interface in `core` keeps a fallback to SQLite itself cheap, since the file format is the same.
