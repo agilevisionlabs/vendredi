@@ -45,7 +45,7 @@ impl Desktop {
                         confirm: false,
                     });
                 }
-                if ui.button("Edit configuration file").clicked() {
+                if button(ui, "Edit configuration file", false).clicked() {
                     self.navigate(View::Config);
                 }
             });
