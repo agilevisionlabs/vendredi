@@ -199,15 +199,7 @@ pub(super) fn line(ui: &Ui, a: Pos2, b: Pos2) {
     ui.painter()
         .line_segment([a, b], Stroke::new(1.0_f32, LINE));
 }
-pub(super) fn time(ms: i64) -> String {
-    chrono::DateTime::from_timestamp_millis(ms)
-        .map(|v| {
-            v.with_timezone(&chrono::Local)
-                .format("%H:%M:%S")
-                .to_string()
-        })
-        .unwrap_or_default()
-}
+pub(super) use vendredi_core::engine::local_time as time;
 pub(super) fn button(ui: &mut Ui, label: &str, primary: bool) -> Response {
     let text = RichText::new(label).color(if primary { Color32::WHITE } else { TEXT });
     ui.add(

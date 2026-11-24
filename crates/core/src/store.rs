@@ -30,11 +30,22 @@ impl Store {
     }
 
     pub fn query(&self, sql: &str, args: impl IntoParams) -> Result<Vec<Row>> {
+        self.query_filter_map(sql, args, |row| Ok(Some(row)))
+    }
+
+    pub fn query_filter_map<T>(
+        &self,
+        sql: &str,
+        args: impl IntoParams,
+        mut select: impl FnMut(Row) -> Result<Option<T>>,
+    ) -> Result<Vec<T>> {
         self.runtime.block_on(async {
             let mut cursor = self.conn.query(sql, args).await?;
             let mut rows = Vec::new();
             while let Some(row) = cursor.next().await? {
-                rows.push(row);
+                if let Some(value) = select(row)? {
+                    rows.push(value);
+                }
             }
             Ok(rows)
         })

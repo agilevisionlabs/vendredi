@@ -4237,7 +4237,6 @@ name = "vendredi"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "eframe",
  "serde_json",
  "tempfile",
@@ -4253,6 +4252,7 @@ dependencies = [
  "anyhow",
  "boa_engine",
  "chrono",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",

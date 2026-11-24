@@ -25,13 +25,12 @@ WITH sources AS (
 SELECT t.id,t.root,t.time,t.direction,t.partner,t.status,
        coalesce(m.kinds,''),coalesce(e.refs,''),coalesce(m.version,''),
        coalesce(f.amount,0), coalesce(d.missed,0), coalesce(d.failed,0),
-       coalesce(d.rejected,0),coalesce(e.rejected,0),coalesce(e.accepted,0),coalesce(e.requested,0)
+       coalesce(d.rejected,0),coalesce(e.rejected,0),coalesce(e.accepted,0),coalesce(e.requested,0),
+       CASE WHEN ?1 THEN t.bytes END
 FROM transfers t
 LEFT JOIN sources s ON s.id=t.id
 LEFT JOIN envelopes e ON e.transfer=s.source
 LEFT JOIN types m ON m.transfer=s.source
 LEFT JOIN errors f ON f.transfer=t.id
 LEFT JOIN decisions d ON d.root=t.id
-WHERE ?1='' OR instr(lower(coalesce(e.refs,'')),lower(?1))>0
- OR instr(lower(coalesce(m.kinds,'')),lower(?1))>0 OR instr(lower(CAST(t.bytes AS TEXT)),lower(?1))>0
 ORDER BY t.id DESC

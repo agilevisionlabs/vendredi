@@ -4,6 +4,7 @@ mod inspector;
 mod partners;
 mod rules;
 mod scripts;
+mod search;
 mod send;
 mod settings;
 mod theme;
@@ -115,6 +116,8 @@ struct Desktop {
     detail_tab: DetailTab,
     segment: usize,
     search: String,
+    highlight: Option<vendredi_core::engine::TrafficSearch>,
+    reveal_match: bool,
     matches: BTreeSet<i64>,
     direction: String,
     filter_status: String,
@@ -179,6 +182,8 @@ impl Desktop {
             detail_tab: DetailTab::Message,
             segment: 0,
             search: String::new(),
+            highlight: None,
+            reveal_match: false,
             matches: BTreeSet::new(),
             direction: "Any".into(),
             filter_status: "Any".into(),
@@ -213,6 +218,7 @@ impl Desktop {
     }
     fn select(&mut self, id: i64) {
         self.selected = Some(id);
+        self.reveal_match = true;
         self.segment = 0;
         self.detail = Value::Null;
         self.detail_tab = DetailTab::Message;
@@ -785,7 +791,7 @@ send = { directory = "freight-out" }
                 .filter(|r| app.visible(r))
                 .all(|r| r.outgoing)
         );
-        click(&mut app, &ctx, "Search by reference, type or content")?;
+        click(&mut app, &ctx, "Search traffic and message text")?;
         frame(
             &mut app,
             &ctx,
@@ -793,6 +799,34 @@ send = { directory = "freight-out" }
         );
         click(&mut app, &ctx, "Clear filters")?;
         assert!(app.search.is_empty() && app.filter_status == "Any" && app.direction == "Any");
+        for (query, expected) in [("Supplier", "Supplier"), ("bgm+220", "220")] {
+            click(&mut app, &ctx, "Search traffic and message text")?;
+            frame(&mut app, &ctx, vec![Event::Text(query.into())]);
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                let out = frame(&mut app, &ctx, vec![]);
+                if !app.matches.is_empty()
+                    && out.shapes.iter().any(|s| {
+                        let egui::Shape::Text(text) = &s.shape else {
+                            return false;
+                        };
+                        let job = &text.galley.job;
+                        job.sections.iter().any(|section| {
+                            section.format.background == search::HIGHLIGHT
+                                && job.text[section.byte_range.clone()].contains(expected)
+                        })
+                    })
+                {
+                    break;
+                }
+                ensure!(
+                    Instant::now() < deadline,
+                    "missing rendered match for {query}"
+                );
+                thread::sleep(Duration::from_millis(8));
+            }
+            app.clear_search();
+        }
         click(&mut app, &ctx, "→  Send document…")?;
         click(&mut app, &ctx, "JavaScript")?;
         assert_eq!(app.send_file, "report.js");
@@ -854,7 +888,11 @@ send = { directory = "freight-out" }
             app.drain();
         }
         assert!(app.detail["raw"].as_str().unwrap().contains("ORDRSP"));
-        click(&mut app, &ctx, "BGM")?;
+        let segment_text = app.detail["segments"][2]["raw"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        click(&mut app, &ctx, &segment_text)?;
         assert_eq!(app.segment, 2);
         click(&mut app, &ctx, "Transport")?;
         assert!(matches!(app.detail_tab, DetailTab::Transport));

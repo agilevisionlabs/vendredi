@@ -263,7 +263,7 @@ impl Desktop {
                                                 .is_some_and(|r| !self.visible(r))
                                             {
                                                 self.view = View::All;
-                                                self.search.clear();
+                                                self.clear_search();
                                                 self.direction = "Any".into();
                                                 self.filter_status = "Any".into();
                                             }
@@ -401,6 +401,13 @@ impl Desktop {
     }
     fn message(&mut self, ui: &mut Ui, r: Rect) {
         let segments = array(&self.detail, "segments");
+        let message = text(&self.detail, "raw");
+        let hits = self.hits(message);
+        let reveal = self.reveal_match && !hits.is_empty();
+        if !segments.is_empty() {
+            self.reveal_match = false;
+        }
+        let mut offset = 0;
         let split = (r.bottom() - 60.).max(r.top());
         let code = Rect::from_min_max(r.min, pos2(r.right(), split));
         ui.painter().rect_filled(code, 0, CODE);
@@ -438,26 +445,47 @@ impl Desktop {
                         mono(12.),
                         MUTED,
                     );
-                    let tag = text(seg, "tag");
                     let raw = text(seg, "raw");
-                    let bounds = ui.painter().text(
-                        row.left_center() + vec2(43., 0.),
-                        Align2::LEFT_CENTER,
+                    let tag = text(seg, "tag");
+                    let tag = if raw.starts_with(tag) { tag } else { "" };
+                    offset += message[offset..].len()
+                        - message[offset..].trim_start_matches(['\r', '\n']).len();
+                    let mut job = egui::text::LayoutJob::default();
+                    let tag_color = if matches!(tag, "UNB" | "UNH" | "UNT" | "UNZ") {
+                        MUTED
+                    } else {
+                        BLUE
+                    };
+                    search::append(
+                        &mut job,
                         tag,
-                        mono(12.),
-                        if matches!(tag, "UNB" | "UNH" | "UNT" | "UNZ") {
-                            MUTED
-                        } else {
-                            BLUE
-                        },
+                        offset,
+                        &hits,
+                        TextFormat::simple(mono(12.), tag_color),
                     );
-                    ui.painter().text(
-                        pos2(bounds.right(), row.center().y),
-                        Align2::LEFT_CENTER,
-                        raw.strip_prefix(tag).unwrap_or(raw),
-                        mono(12.),
-                        TEXT,
+                    search::append(
+                        &mut job,
+                        &raw[tag.len()..],
+                        offset + tag.len(),
+                        &hits,
+                        TextFormat::simple(mono(12.), TEXT),
                     );
+                    let galley = ui.painter().layout_job(job);
+                    let pos = Align2::LEFT_CENTER
+                        .anchor_size(row.left_center() + vec2(43., 0.), galley.size())
+                        .min;
+                    if reveal
+                        && let Some(hit) = hits.first()
+                        && (offset..offset + raw.len()).contains(&hit.start)
+                    {
+                        let index = raw[..hit.start - offset].chars().count();
+                        let target = galley
+                            .pos_from_cursor(egui::text::CCursor::new(index))
+                            .translate(pos.to_vec2());
+                        ui.scroll_to_rect(target.expand(8.), None);
+                    }
+                    ui.painter().galley(pos, galley, TEXT);
+                    offset += raw.len();
                     if res.clicked() {
                         self.segment = i;
                     }

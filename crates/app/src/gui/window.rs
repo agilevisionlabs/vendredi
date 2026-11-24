@@ -294,17 +294,14 @@ impl Desktop {
                                 TextEdit::singleline(&mut self.search)
                                     .frame(false)
                                     .hint_text(
-                                        RichText::new("Search by reference, type or content")
+                                        RichText::new("Search traffic and message text")
                                             .color(MUTED),
                                     )
                                     .desired_width(ui.available_width()),
                             )
                             .changed()
                         {
-                            self.matches.clear();
-                            if !self.search.is_empty() {
-                                self.command(Command::Traffic(self.search.clone()));
-                            }
+                            self.update_search();
                         }
                     });
                 });
@@ -372,14 +369,39 @@ impl Desktop {
                         );
                     }
                     line(ui, row.left_bottom(), row.right_bottom());
+                    let paint = |painter: Painter, pos, align: Align2, text: &str, face, color| {
+                        let mut job = egui::text::LayoutJob::default();
+                        let hits = self.hits(text);
+                        search::append(&mut job, text, 0, &hits, TextFormat::simple(face, color));
+                        let galley = painter.layout_job(job);
+                        let mut origin = align.anchor_size(pos, galley.size()).min;
+                        if let Some(hit) = hits.first() {
+                            let cursor_x = |byte| {
+                                galley
+                                    .pos_from_cursor(egui::text::CCursor::new(
+                                        text[..byte].chars().count(),
+                                    ))
+                                    .left()
+                            };
+                            let overflow =
+                                origin.x + cursor_x(hit.end) - painter.clip_rect().right();
+                            origin.x -= overflow.max(0.).min(cursor_x(hit.start));
+                        }
+                        painter.galley(origin, galley, color);
+                    };
                     let cell = |i: usize, s: &str, face: FontId, color: Color32| {
                         let rect = Rect::from_min_max(
                             row.min + vec2(cols[i] * w + 12., 0.),
                             pos2(row.left() + cols[i + 1] * w - 3., row.bottom()),
                         );
-                        ui.painter()
-                            .with_clip_rect(ui.clip_rect().intersect(rect))
-                            .text(rect.left_center(), Align2::LEFT_CENTER, s, face, color)
+                        paint(
+                            ui.painter().with_clip_rect(ui.clip_rect().intersect(rect)),
+                            rect.left_center(),
+                            Align2::LEFT_CENTER,
+                            s,
+                            face,
+                            color,
+                        );
                     };
                     cell(0, &time(t.time), mono(12.), MUTED);
                     let chip = Rect::from_center_size(
@@ -393,24 +415,20 @@ impl Desktop {
                         Stroke::new(1.0_f32, if t.outgoing { EDGE } else { TEXT }),
                         StrokeKind::Inside,
                     );
-                    ui.painter().text(
+                    paint(
+                        ui.painter().clone(),
                         chip.center(),
                         Align2::CENTER_CENTER,
-                        if t.outgoing { "OUT" } else { "IN" },
+                        t.direction_label(),
                         font(11.),
                         if t.outgoing { SECONDARY_TEXT } else { BG },
                     );
                     cell(2, &t.partner, font(13.), TEXT);
                     cell(3, &t.kind, mono_bold(12.), TEXT);
                     cell(4, &t.reference, mono(12.), MUTED);
-                    let status = if t.attention {
-                        format!("⚠ {}", t.status)
-                    } else {
-                        t.status.clone()
-                    };
                     cell(
                         5,
-                        &status,
+                        &t.status_label(),
                         font(13.),
                         if t.attention { AMBER } else { TEXT },
                     );
@@ -447,7 +465,7 @@ impl Desktop {
                                 || self.filter_status != "Any")
                                 && ui.link("Clear filters").clicked()
                             {
-                                self.search.clear();
+                                self.clear_search();
                                 self.direction = "Any".into();
                                 self.filter_status = "Any".into();
                             }

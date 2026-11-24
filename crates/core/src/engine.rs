@@ -61,6 +61,59 @@ pub struct TrafficRow {
     pub attention: bool,
 }
 
+pub fn local_time(ms: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(ms)
+        .map(|v| {
+            v.with_timezone(&chrono::Local)
+                .format("%H:%M:%S")
+                .to_string()
+        })
+        .unwrap_or_default()
+}
+
+/// The same literal matcher drives result inclusion and the desktop highlights.
+pub struct TrafficSearch(regex::Regex);
+impl TrafficSearch {
+    pub fn new(text: &str) -> Result<Self> {
+        Ok(Self(
+            regex::RegexBuilder::new(&regex::escape(text))
+                .case_insensitive(true)
+                .build()?,
+        ))
+    }
+
+    pub fn ranges<'a>(
+        &'a self,
+        text: &'a str,
+    ) -> impl Iterator<Item = std::ops::Range<usize>> + 'a {
+        self.0.find_iter(text).map(|m| m.range())
+    }
+}
+impl TrafficRow {
+    pub fn direction_label(&self) -> &'static str {
+        if self.outgoing { "OUT" } else { "IN" }
+    }
+    pub fn status_label(&self) -> String {
+        if self.attention {
+            format!("⚠ {}", self.status)
+        } else {
+            self.status.clone()
+        }
+    }
+    fn matches(&self, query: &TrafficSearch) -> bool {
+        [
+            &self.partner,
+            &self.kind,
+            &self.reference,
+            self.direction_label(),
+            &self.status_label(),
+            &local_time(self.time),
+        ]
+        .iter()
+        .any(|s| query.0.is_match(s))
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HistoryPeriod {
     Minute,
@@ -212,10 +265,13 @@ impl Engine {
         .map(|r|Ok(serde_json::from_str(&r.get::<String>(0)?)?)).collect()
     }
     pub fn traffic(&self, search: &str) -> Result<Vec<TrafficRow>> {
-        self.store
-            .query(include_str!("traffic.sql"), [search])?
-            .iter()
-            .map(|r| {
+        let pattern = (!search.is_empty())
+            .then(|| TrafficSearch::new(search))
+            .transpose()?;
+        self.store.query_filter_map(
+            include_str!("traffic.sql"),
+            [i64::from(pattern.is_some())],
+            |r| {
                 let outgoing = r.get::<String>(3)? == "out";
                 let delivery = r.get::<String>(5)?;
                 let findings = r.get::<i64>(9)?;
@@ -242,7 +298,7 @@ impl Engine {
                     _ if outgoing => ("Delivered".into(), false),
                     _ => ("Accepted".into(), false),
                 };
-                Ok(TrafficRow {
+                let row = TrafficRow {
                     id: r.get(0)?,
                     root: r.get(1)?,
                     time: r.get(2)?,
@@ -253,9 +309,16 @@ impl Engine {
                     version: r.get(8)?,
                     status,
                     attention,
-                })
-            })
-            .collect()
+                };
+                if let Some(query) = &pattern
+                    && !row.matches(query)
+                    && !query.0.is_match(&edi::latin1(&r.get::<Vec<u8>>(16)?))
+                {
+                    return Ok(None);
+                }
+                Ok(Some(row))
+            },
+        )
     }
     pub fn replay(&mut self, id: i64) -> Result<()> {
         let rows = self.store.query(
@@ -308,7 +371,7 @@ impl Engine {
         let findings=self.store.query("SELECT severity,code,offset,text FROM findings WHERE transfer=? ORDER BY offset,id",[id])?
             .iter().map(|r|Ok(json!({"severity":r.get::<String>(0)?,"code":r.get::<String>(1)?,"offset":r.get::<i64>(2)?,"text":r.get::<String>(3)?}))).collect::<Result<Vec<_>>>()?;
         Ok(
-            json!({"transfer":id,"segments":edi::lines(&bytes),"findings":findings,"interchanges":summaries,"status":r.get::<String>(2)?,"metadata":r.get::<String>(1)?,"bytes":bytes,"raw":String::from_utf8_lossy(&bytes),"parsed":edi::parse(&bytes),"events":events}),
+            json!({"transfer":id,"segments":edi::lines(&bytes),"findings":findings,"interchanges":summaries,"status":r.get::<String>(2)?,"metadata":r.get::<String>(1)?,"bytes":bytes,"raw":edi::latin1(&bytes),"parsed":edi::parse(&bytes),"events":events}),
         )
     }
     pub fn partner(&self, name: &str) -> Result<usize> {
@@ -833,6 +896,47 @@ mod tests {
             id
         );
         assert_eq!(detail["segments"][2]["elements"][1][0], "PO42");
+        Ok(())
+    }
+    #[test]
+    fn search_visible_fields_and_latin1_contents() -> Result<()> {
+        let (_dir, mut workspace) = fixture()?;
+        workspace.partners[0].name = "Café Nord".into();
+        let clock = Arc::new(Manual(AtomicI64::new(10_000)));
+        let mut engine = Engine::open(workspace, clock)?;
+        let inbound = input(&mut engine, 0, ORDER)?;
+        for delivery in engine.take_deliveries() {
+            engine.finish_delivery(delivery.id, Ok(String::new()))?;
+        }
+        for term in [
+            "CAFÉ NORD",
+            "in",
+            "accepted",
+            "orders",
+            "ORDER42",
+            &local_time(10_000),
+        ] {
+            assert!(
+                engine.traffic(term)?.iter().any(|r| r.id == inbound),
+                "{term}"
+            );
+        }
+        for term in ["out", "delivered"] {
+            let results = engine.traffic(term)?;
+            assert!(!results.is_empty() && results.iter().all(|r| r.outgoing));
+        }
+        let invalid = input(&mut engine, 0, b"pi\xe8ce [A]*")?;
+        for term in ["PIÈCE", "[a]*", "⚠ Rejected · 1 finding"] {
+            assert_eq!(
+                engine
+                    .traffic(term)?
+                    .iter()
+                    .map(|r| r.id)
+                    .collect::<Vec<_>>(),
+                [invalid]
+            );
+        }
+        assert!(engine.traffic("not present")?.is_empty());
         Ok(())
     }
     #[test]
