@@ -10,3 +10,4 @@ vendredi-core.workspace = true
 tiny_http = "0.12"
 ureq = { version = "2.12", default-features = false }
 notify = "8"
+serde_json.workspace = true
