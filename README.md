@@ -2,7 +2,57 @@
 
 An EDI simulator for developers: a fake trading partner that runs on your machine, receives the EDIFACT documents your integration sends, and replies with acknowledgements and response documents.
 
-> Status: early design. Nothing is implemented yet; this document defines what the project is and is not.
+## Run an exchange
+
+Open the `vendredi` executable. On first launch it creates a sample workspace in the user's home directory under `Vendredi`. Choose **Send sample order**. Select the inbound transfer or either reply to inspect its raw bytes, validation findings and execution history. The sample supplier writes a `CONTRL` and an `ORDRSP` into the workspace’s `replies` folder.
+
+To run the sample headless, initialize a workspace and start its listener.
+
+```sh
+vendredi init ./demo
+vendredi run --headless ./demo
+```
+
+Submit the example interchange from a second terminal.
+
+```sh
+curl -i --data-binary @demo/order.edi http://127.0.0.1:8180/supplier/orders
+```
+
+The listener returns HTTP 202 after recording the inbound bytes. Replies use the partner’s send channel. Headless mode writes one JSON event per line. To receive replies by HTTP, point the send URL at a local receiver as shown in the [HTTP example](examples/orders/vendredi.toml).
+
+## Workspaces and commands
+
+- Edit `vendredi.toml` and its referenced documents and scripts on disk or in the **Workspace** tab. Each partner has ordered rules, one or more receive channels and one send channel. The first matching rule runs. The sample supports UN/EDIFACT syntax version 3, independent of the message directory release.
+- To submit a file through a folder channel, write it under a temporary name in the same directory, close it, and rename it to the configured suffix (e.g. `.edi`). The suffix signals that the file is complete. Vendredi claims and removes it after recording. Each outgoing file is published under its transfer ID.
+- A running headless instance accepts `send Supplier confirmation.edi`, `send Supplier script.js functionName`, `inspect 1`, `resend 2`, and `quit` on standard input. Use a JSON array of strings for arguments containing spaces. With the workspace closed, run `vendredi send ./demo Supplier confirmation.edi`, `vendredi inspect ./demo 1` or `vendredi resend ./demo 2`. One engine owns the workspace at a time.
+- `vendredi gui ./demo` opens the same configuration and traffic history. Embedded Turso stores exact bytes, delivery attempts, findings, per-partner counters and script state in `.vendredi/vendredi.db`. History retention runs when the workspace opens. Failed or interrupted deliveries are available for explicit resend.
+- A partner can acknowledge `always`, when `requested`, or `never`. Envelope, syntax and identity findings suppress business replies. Incoming `CONTRL` messages correlate by partner identity and control reference. Ambiguous references produce an event. The engine skips automatic acknowledgements for interchanges containing a `CONTRL`.
+- Actions use `document`, `script` and `function`, `delay_ms`, or `fault`. Fault values are `reject`, `suppress_ack`, `duplicate_reference`, `wrong_count`, `duplicate`, `malformed`, `http500`, `slow_response`, and `no_response`. HTTP and acknowledgement faults affect the triggering receipt or acknowledgement. Envelope and content faults affect subsequent sends in the execution. Scheduled delays live in the running engine.
+
+A JavaScript action receives the parsed interchange and the host API. Partner-initiated scripts receive `null` for the interchange. The engine builds the envelope and counts for sent messages.
+
+```js
+function confirm(interchange, api) {
+    const count = (api.get("orders") || 0) + 1;
+    api.set("orders", count);
+    api.log("Confirmed order " + count);
+    api.send(api.build("ORDRSP:D:96A:UN", "BGM+231+" + count + "+9'"));
+}
+```
+
+Scripts can also call `api.contrl()`, `api.nextReference()` and `api.now()` (Unix milliseconds). Script evaluation runs with loop, recursion and total instruction limits. Static documents contain a single `UNH` through `UNT` message using the default separators. The engine applies the partner’s separators and identities on delivery.
+
+## Build and test
+
+```sh
+cargo build --release --locked
+cargo test --workspace --locked
+cargo test --locked -p vendredi exchange_edit_and_reopen -- --ignored
+python3 tests/local_instance.py --binary target/release/vendredi
+```
+
+The last two commands bind loopback listeners and use temporary workspaces. On Windows pass `target/release/vendredi.exe`. See the [implementation milestones](IMPLEMENTATION.md) and [runtime architecture](ARCHITECTURE.md).
 
 ## Goals
 

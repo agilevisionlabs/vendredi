@@ -54,3 +54,27 @@ Run the HTTP and folder exchange, fault, restart and GUI smoke checks on Windows
 | Fault and recovery semantics | Before milestone 3, define how HTTP faults are chosen from an inbound request, how to report ambiguous acknowledgements after a duplicate-reference fault, and how interrupted outbound attempts appear for manual resend. |
 
 The proposed first release defers directory-based message validation, further transport protocols and a plugin system.
+
+## Local verification on 2026-11-24
+
+The release builds use the locked Cargo workspace. Ten core tests passed, including termination during an open database transaction, script budget recovery, deterministic reply bytes, acknowledgement correlation, retention and reference continuity. The separate desktop widget test exercised the sample-order button, transfer inspection, text editing, save/reload and headless reopening.
+
+Six local-instance tests passed for each of the four executables below. They exercised HTTP delivery to a real receiver, offline delivery failure and resend, malformed input and process restart, folder publication and recovered claims, unavailable output directories, acknowledgement, envelope and duplicate-delivery faults, and slow or silent HTTP receipts with scripted malformed content.
+
+| Executable | Bytes | Local environment |
+|---|---:|---|
+| macOS arm64 | 22,158,704 | Native macOS 27.2.1, including window and sample exchange |
+| macOS x64 | 22,227,232 | Rosetta on the same Mac, including window and sample exchange |
+| Windows x64 | 20,525,568 | MinGW build under Wine in an offline Linux container. A no-argument launch created the sample workspace, opened the desktop and produced both replies. |
+| Linux arm64 | 23,166,768 | Native arm64 Linux VM. A separate offline container received only the binary and sent a bundled document. |
+
+The table below uses decimal MB. Each release run initialized a fresh workspace, timed launch to the ready event or visible native window, completed an order, settled for one second, and measured resident memory and process CPU over five seconds. These are single-run observations. Run `tests/release_macos.py` to repeat them.
+
+| Executable and mode | Ready | Resident memory | Idle CPU |
+|---|---:|---:|---:|
+| macOS arm64 headless | 19 ms | 17.4 MB | 0.0% |
+| macOS arm64 desktop | 328 ms | 124.1 MB | 0.0% |
+| macOS x64 headless under Rosetta | 29 ms | 14.8 MB | 0.0% |
+| macOS x64 desktop under Rosetta | 705 ms | 73.3 MB | 0.2% |
+
+The arm64 desktop exceeds the initial 100 MB resident-memory target. The original three-dependency GUI spike at commit `d6d433d` measured 20,134,288 bytes on disk, 755 ms to a visible window and 125.6 MB resident using the same window probe. All four final executables are under 30 MB. Native Windows and physical Intel Mac results are pending. The repository includes a native runner matrix, a Windows window and resource probe, and packaging that verifies the executable extracted from each archive.
