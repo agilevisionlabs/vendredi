@@ -51,8 +51,10 @@ jobs:
         run: |
           $mesa = Join-Path $env:MSYS2_LOCATION 'ucrt64/bin'
           $env:PATH = "$mesa;$env:PATH"
-          Copy-Item (Join-Path $mesa 'opengl32.dll') target/release/
-          ./tests/release_windows.ps1 target/release/vendredi.exe
+          $smoke = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'vendredi-gui')
+          Copy-Item target/release/vendredi.exe $smoke
+          Copy-Item (Join-Path $mesa 'opengl32.dll') $smoke
+          ./tests/release_windows.ps1 (Join-Path $smoke 'vendredi.exe')
       - run: python scripts/package_release.py target/release/${{ matrix.binary }} ${{ matrix.artifact }}
       - run: python tests/local_instance.py --archive target/dist/vendredi-${{ matrix.artifact }}.${{ runner.os == 'Windows' && 'zip' || 'tar.gz' }}
       - run: python -m pip install --target "${{ runner.temp }}/profile-deps" psutil==7.2.2
