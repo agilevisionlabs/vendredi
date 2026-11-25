@@ -25,6 +25,7 @@ impl PartnerForm {
                 charset: "UNOC".into(),
                 acknowledge: Policy::Always,
                 separators: None,
+                edifact: None,
                 x12: None,
                 rules: vec![],
                 cases: vec![],
@@ -63,9 +64,19 @@ impl PartnerForm {
             p.standard.label()
         );
         match p.standard {
-            Standard::Edifact => p.x12 = None,
+            Standard::Edifact => {
+                p.x12 = None;
+                // Keep settings where the file has them: the edifact table wins.
+                if p.edifact.is_some() {
+                    p.edifact = Some(vendredi_core::config::Edifact {
+                        charset: Some(p.charset.clone()),
+                        separators: p.separators.clone(),
+                    });
+                }
+            }
             Standard::X12 => {
                 p.separators = None;
+                p.edifact = None;
                 let x = p.x12.get_or_insert_with(X12::default);
                 for value in [
                     &mut x.application,
@@ -104,8 +115,9 @@ impl PartnerForm {
         }
         let mut data = toml_edit::ser::to_document(p)?.into_table();
         data.remove("rules");
-        if p.standard == Standard::X12 {
+        if p.standard == Standard::X12 || p.edifact.is_some() {
             data.remove("charset");
+            data.remove("separators");
         }
         if let Some(i) = self.index {
             let old = toml_edit::ser::to_document(&app.workspace.partners[i])?;
@@ -120,7 +132,7 @@ impl PartnerForm {
                 }
             }
             // Settings of the other standard no longer apply.
-            for key in ["separators", "x12", "standard", "charset"] {
+            for key in ["separators", "x12", "standard", "charset", "edifact"] {
                 if !present.iter().any(|k| k == key) {
                     table.remove(key);
                 }

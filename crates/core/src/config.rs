@@ -40,6 +40,10 @@ pub struct Partner {
     pub send: SendChannel,
     #[serde(default)]
     pub separators: Option<String>,
+    /// EDIFACT settings grouped like `x12`. They replace `charset` and
+    /// `separators`, which remain readable in their 0.1 place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edifact: Option<Edifact>,
     /// Envelope and acknowledgement settings for X12 partners.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub x12: Option<X12>,
@@ -56,6 +60,15 @@ pub struct Partner {
     #[serde(skip)]
     pub active: Option<Active>,
 }
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Edifact {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub charset: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub separators: Option<String>,
+}
+
 fn default_charset() -> String {
     "UNOC".into()
 }
@@ -352,6 +365,16 @@ impl Workspace {
             toml::from_str(&fs::read_to_string(&path).with_context(|| path.display().to_string())?)
                 .with_context(|| path.display().to_string())?;
         w.root = dir.canonicalize()?;
+        for p in &mut w.partners {
+            if let Some(e) = &p.edifact {
+                if let Some(charset) = &e.charset {
+                    p.charset = charset.clone();
+                }
+                if e.separators.is_some() {
+                    p.separators = e.separators.clone();
+                }
+            }
+        }
         w.validate().with_context(|| path.display().to_string())?;
         w.cases = case::library(&w.root)?;
         let cases = std::mem::take(&mut w.cases);
@@ -562,6 +585,28 @@ mod tests {
         let p = crate::interchange::parse(include_bytes!("../../../examples/orders/order.edi"));
         assert!(w.partners[0].rules[0].matches(&p.interchanges[0].messages()[0]));
         assert_eq!(w.partners[0].standard, Standard::Edifact);
+        Ok(())
+    }
+    #[test]
+    fn edifact_settings_read_from_either_place() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let base = include_str!("../../../examples/orders/vendredi.toml");
+        fs::write(
+            dir.path().join("confirmation.edi"),
+            include_bytes!("../../../examples/orders/confirmation.edi"),
+        )?;
+        fs::write(
+            dir.path().join("vendredi.toml"),
+            base.replace(
+                "charset = \"UNOC\"\n",
+                "edifact = { charset = \"UNOB\", separators = \"*;,! ~\" }\n",
+            ),
+        )?;
+        let w = Workspace::load(dir.path())?;
+        assert_eq!(w.partners[0].charset, "UNOB");
+        assert_eq!(w.partners[0].syntax()?.0, *b"*;,! ~");
+        fs::write(dir.path().join("vendredi.toml"), base)?;
+        assert_eq!(Workspace::load(dir.path())?.partners[0].charset, "UNOC");
         Ok(())
     }
     #[test]
