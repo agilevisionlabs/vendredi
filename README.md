@@ -32,7 +32,7 @@ The listener returns HTTP 202 after recording the inbound bytes. Replies use the
 - Each partner has ordered rules, one or more receive channels and one send channel. The first matching rule runs. The sample supports UN/EDIFACT syntax version 3, independent of the message directory release.
 - To submit a file through a folder channel, write it under a temporary name in the same directory, close it, and rename it to the configured suffix (e.g. `.edi`). The suffix signals that the file is complete. Vendredi claims and removes it after recording. Each outgoing file is published under its transfer ID.
 - Choose **Traffic → Clear history…** to permanently remove exchanges from the last minute, hour, day, or week. Select all partners or a single partner, including one already removed. The last transfer determines the age of each exchange. Cleanup skips pending deliveries and scheduled actions and preserves partner state and reference counters.
-- A running headless instance accepts `send Supplier confirmation.edi`, `send Supplier script.js functionName`, `inspect 1`, `resend 2`, and `quit` on standard input. Use a JSON array of strings for arguments containing spaces. With the workspace closed, run `vendredi send ./demo Supplier confirmation.edi`, `vendredi inspect ./demo 1` or `vendredi resend ./demo 2`. One engine owns the workspace at a time.
+- A running headless instance accepts `send Supplier confirmation.edi`, `send Supplier script.js functionName`, `inspect 1`, `resend 2`, `case Supplier reject-orders`, `sample Supplier Order`, `initiate Supplier Invoice` and `quit` on standard input. Use a JSON array of strings for arguments containing spaces. With the workspace closed, run `vendredi send ./demo Supplier confirmation.edi`, `vendredi inspect ./demo 1` or `vendredi resend ./demo 2`. One engine owns the workspace at a time.
 - `vendredi gui ./demo` opens the same configuration and traffic history. Embedded Turso stores exact bytes, delivery attempts, findings, per-partner counters and script state in `.vendredi/vendredi.db`. History retention runs when the workspace opens. Failed or interrupted deliveries are available for explicit resend.
 - A partner can acknowledge `always`, when `requested`, or `never`. Envelope, syntax and identity findings suppress business replies. Incoming `CONTRL` messages correlate by partner identity and control reference. Ambiguous references produce an event. The engine skips automatic acknowledgements for interchanges containing a `CONTRL`.
 - Actions use `document`, `script` and `function`, `delay_ms`, or `fault`. Fault values are `reject`, `suppress_ack`, `duplicate_reference`, `wrong_count`, `duplicate`, `malformed`, `http500`, `slow_response`, and `no_response`. HTTP and acknowledgement faults affect the triggering receipt or acknowledgement. Envelope and content faults affect subsequent sends in the execution. Scheduled delays live in the running engine.
@@ -60,6 +60,61 @@ Scripts can also call `api.ack()` to request the acknowledgement for the partner
 Scripts written for 0.1 keep working: `api.build("ORDRSP:D:96A:UN", "BGM+231'")` with raw segment text, `api.send` of that text, and the `messages`, `header`, `findings` and `syntax` properties of the interchange. Each use records a `deprecated` event naming the feature.
 
 Rules match `message`, the message type or X12 transaction set, and an optional `version`, such as `D96A` or the X12 `GS08` value `005010`. A bare directory such as `D` matches every release. Workspaces from 0.1 that set `version = "D"` and `release = "96A"` load unchanged.
+
+## Cases
+
+A case is a reusable partner scenario: rules and actions, the documents and scripts they use, sample inbound messages, partner-initiated sends and the replies it should produce. A case never contains identities or channels. The partner supplies them, so one case works with any partner of the same EDI standard. A shared repository of cases can describe typical behavior, such as a partner that confirms, rejects, answers slowly or sends malformed replies.
+
+`vendredi init` installs the starter cases from [`examples/cases`](examples/cases) and attaches them to the sample partner. The partner's own rules remain active as its `default` case.
+
+```sh
+vendredi case list ./demo
+vendredi case use ./demo Supplier reject-orders
+vendredi sample ./demo Supplier Order
+vendredi case use ./demo Supplier default
+```
+
+In the desktop, open **Cases** to read a case, choose **Make active**, send its samples or run its partner-initiated sends. Each switch records a `case_switched` event, and the traffic timeline names the case that answered each message. The active case is saved as `case = "reject-orders"` on the partner in `vendredi.toml`, next to the attached `cases` list.
+
+### Case format
+
+A case is a folder under `cases/` with a `case.json` and the files it references, or a single JSON file that embeds those files in a `files` map. Imports write the folder form.
+
+```json
+{
+  "vendredi_case": 1,
+  "id": "reject-orders",
+  "name": "Reject every order",
+  "description": "Answers each ORDERS with a negative CONTRL and sends no business reply.",
+  "standard": "edifact",
+  "tags": ["orders", "fault"],
+  "acknowledge": "always",
+  "rules": [{ "name": "Orders", "message": "ORDERS", "version": "D96A", "actions": [{ "fault": "reject" }] }],
+  "samples": [{ "name": "Order", "document": "order.edi" }],
+  "initiate": [],
+  "expect": [{ "sample": "Order", "replies": ["nack.edi"] }]
+}
+```
+
+Rules and actions use the same fields as `vendredi.toml`. Conditions belong in JavaScript, and the format has no expression language. `acknowledge` optionally overrides the partner's policy. Documents, samples and expected replies are single `UNH`…`UNT` messages with the default separators. The engine wraps a sample in an interchange from the workspace identity to the partner. `initiate` lists named action lists that the partner starts on its own, such as sending an invoice. File paths must stay inside the case.
+
+A catalog lists cases by relative path, as folders or single JSON files:
+
+```json
+{ "vendredi_catalog": 1, "name": "Starter cases", "cases": ["confirm-orders.json", "late-partner/"] }
+```
+
+### Import and test
+
+```sh
+vendredi case import ./demo https://example.com/edi-cases/catalog.json
+vendredi case import ./demo ../edi-cases --replace
+vendredi case test ../edi-cases
+```
+
+`case import` accepts a case folder, a case or catalog JSON file, a folder with `catalog.json`, or an `https://` URL. It fetches and checks every case before writing anything: file references, documents and script syntax. Imported scripts are only parsed, and run later in the sandbox when a rule fires. Unchanged cases are skipped. A case already installed with different content is listed with its differences, and replaced only with `--replace` or after confirming in the desktop's **Import cases…** dialog. Each installed case records its source, the SHA-256 of its JSON and the import time in `.vendredi-source.json`. HTTPS imports trust the bundled web roots and the system's certificates, refuse redirects to other schemes, and limit each file to 1 MiB.
+
+`case test` runs every `expect` entry in a temporary workspace with the workspace identity `BUYER:ZZ`, the partner `PARTNER:ZZ`, a clock starting at 2026-01-01T00:00Z and fresh references, so the first sample's interchange reference is `S1`. Scheduled delays complete immediately. It compares each sent message with the expected documents, prints the first differing byte of a mismatch, and fails if any check fails. A case repository can run it in CI.
 
 ## Build and test
 
