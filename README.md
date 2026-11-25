@@ -64,7 +64,7 @@ The last two commands bind loopback listeners and use temporary workspaces. On W
 
 ## Release
 
-Set the workspace version in `Cargo.toml`, write the notes in `docs/releases/vX.Y.Z.md`, then push the tag `vX.Y.Z`. The tag build signs both Mac apps with the Developer ID certificate, has Apple notarize them and staples the ticket. It then runs the same archive tests as every other build and publishes the five archives with `SHA256SUMS` as a GitHub release. Other builds sign the Mac apps ad hoc.
+Set the workspace version in `Cargo.toml`, write the notes in `docs/releases/vX.Y.Z.md`, then push the tag `vX.Y.Z`. The tag build signs both Mac apps with the Developer ID certificate, has Apple notarize them and staples the ticket. It then runs the same archive tests as every other build and publishes the five archives, a Linux AppImage for each architecture and `SHA256SUMS` as a GitHub release. Other builds sign the Mac apps ad hoc.
 
 The tagged Mac builds run in the `release` environment, which is restricted to `v*` tags, and read these secrets from it:
 

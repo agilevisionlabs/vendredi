@@ -34,7 +34,7 @@ jobs:
       - run: rustup update stable
       - run: rustup target add --toolchain stable wasm32-wasip1
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libclang-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev libx11-dev
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev libx11-dev libxcursor1 libxi6 libxrandr2 libxkbcommon-x11-0 squashfs-tools xvfb x11-utils
       - run: cargo +stable test --workspace --locked
       - name: Exercise local GUI and listener workflows
         run: cargo +stable test --workspace --locked -- --ignored --test-threads=1
@@ -91,6 +91,19 @@ jobs:
           PYTHONPATH: ${{ runner.temp }}/profile-deps
       - if: runner.os == 'macOS'
         run: python3 tests/release_macos.py target/dist/vendredi-${{ matrix.artifact }}.zip
+      - name: Open the AppImage window on a virtual display
+        if: runner.os == 'Linux'
+        env:
+          PACKAGE: target/dist/vendredi-${{ matrix.artifact }}.AppImage
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: |
+          export HOME="$RUNNER_TEMP/appimage-home"
+          mkdir "$HOME"
+          xvfb-run -a -s "-screen 0 1280x800x24" bash -c '
+            "$PACKAGE" & pid=$!
+            for i in $(seq 60); do xwininfo -root -tree | grep -q "\"Vendredi\"" && break; sleep 0.5; done
+            xwininfo -root -tree | grep "\"Vendredi\": (\"vendredi\""
+            kill $pid'
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: vendredi-${{ matrix.artifact }}

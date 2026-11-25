@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import urllib.request
 import zipfile
 
 
@@ -74,6 +75,50 @@ def package_macos(binary, path):
             subprocess.run(["spctl", "--assess", "--type", "execute", shipped], check=True)
 
 
+# The runtime is the small executable at the front of an AppImage that mounts or
+# extracts the application image appended to it.
+APPIMAGE_RUNTIME = "https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-"
+APPIMAGE_RUNTIME_SHA256 = {
+    "x86_64": "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d",
+    "aarch64": "00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444",
+}
+
+
+def package_appimage(binary, platform, path):
+    repo = Path(__file__).resolve().parents[1]
+    arch = {"linux-x64": "x86_64", "linux-arm64": "aarch64"}[platform]
+    with urllib.request.urlopen(APPIMAGE_RUNTIME + arch) as response:
+        runtime = response.read()
+    assert hashlib.sha256(runtime).hexdigest() == APPIMAGE_RUNTIME_SHA256[arch]
+    with tempfile.TemporaryDirectory() as tmp:
+        appdir = Path(tmp) / "Vendredi.AppDir"
+        (appdir / "usr/bin").mkdir(parents=True)
+        shutil.copy2(binary, appdir / "usr/bin/vendredi")
+        # Starting the executable under its own name gives the window the class "vendredi",
+        # which desktops use to match it to the launcher entry and icon.
+        (appdir / "AppRun").write_text('#!/bin/sh\nexec "$(dirname "$(readlink -f "$0")")/usr/bin/vendredi" "$@"\n')
+        (appdir / "AppRun").chmod(0o755)
+        shutil.copyfile(repo / "packaging/linux/vendredi.png", appdir / "vendredi.png")
+        (appdir / ".DirIcon").symlink_to("vendredi.png")
+        (appdir / "vendredi.desktop").write_text(
+            "[Desktop Entry]\nType=Application\nName=Vendredi\n"
+            "Comment=EDIFACT trading partner simulator\nExec=vendredi\nIcon=vendredi\n"
+            "Categories=Development;\nTerminal=false\nStartupWMClass=vendredi\n"
+        )
+        image = Path(tmp) / "image.squashfs"
+        subprocess.run(
+            ["mksquashfs", appdir, image, "-root-owned", "-noappend", "-comp", "zstd", "-quiet", "-no-progress"],
+            check=True,
+        )
+        path.write_bytes(runtime + image.read_bytes())
+        path.chmod(0o755)
+        # Run the finished AppImage. Extraction works on hosts without FUSE, such as CI runners.
+        workspace = Path(tmp) / "workspace"
+        subprocess.run([path, "init", workspace], check=True, env={**os.environ, "APPIMAGE_EXTRACT_AND_RUN": "1"})
+        assert (workspace / "vendredi.toml").is_file()
+    print(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}")
+
+
 def package(binary, platform, output):
     output.mkdir(parents=True, exist_ok=True)
     if platform.startswith("macos-"):
@@ -95,6 +140,7 @@ def package(binary, platform, output):
             assert archive.getnames() == [binary.name]
             assert archive.getmember(binary.name).mode & 0o111
             assert archive.extractfile(binary.name).read() == binary.read_bytes()
+        package_appimage(binary, platform, output / f"vendredi-{platform}.AppImage")
     print(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}")
 
 
