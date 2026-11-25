@@ -7,3 +7,4 @@ pub mod import;
 pub mod script;
 pub mod selftest;
 pub mod store;
+pub mod x12;
