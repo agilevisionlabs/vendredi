@@ -34,9 +34,11 @@ const CASES: &[&str] = &[
     include_str!("../../../examples/cases/x12-reject-850.json"),
 ];
 
-fn sample(root: &Path) -> Result<()> {
-    std::fs::create_dir_all(root)?;
-    let mut ids = Vec::new();
+/// Writes the starter cases that are not installed yet, leaving installed
+/// copies alone. Returns every starter case and how many it wrote.
+fn install_starter_cases(root: &Path) -> Result<(Vec<case::Case>, usize)> {
+    let mut cases = Vec::new();
+    let mut written = 0;
     for json in CASES {
         let bundle = case::Bundle::resolve(case::Case::parse(json.as_bytes())?, |p| {
             bail!("{} is not embedded", p.display())
@@ -44,12 +46,22 @@ fn sample(root: &Path) -> Result<()> {
         let dir = root.join(case::DIRECTORY).join(&bundle.case.id);
         if !dir.exists() {
             bundle.write(&dir)?;
+            written += 1;
         }
-        // The sample partner exchanges EDIFACT; X12 cases stay installed for X12 partners.
-        if bundle.case.standard == vendredi_core::config::Standard::Edifact {
-            ids.push(format!("{:?}", bundle.case.id));
-        }
+        cases.push(bundle.case);
     }
+    Ok((cases, written))
+}
+
+fn sample(root: &Path) -> Result<()> {
+    std::fs::create_dir_all(root)?;
+    // The sample partner exchanges EDIFACT; X12 cases stay installed for X12 partners.
+    let ids: Vec<_> = install_starter_cases(root)?
+        .0
+        .iter()
+        .filter(|c| c.standard == vendredi_core::config::Standard::Edifact)
+        .map(|c| format!("{:?}", c.id))
+        .collect();
     let config = CONFIG.replace(
         "url = \"http://127.0.0.1:8181/replies\" }",
         &format!("directory = \"replies\" }}\ncases = [{}]", ids.join(", ")),

@@ -157,6 +157,29 @@ fn case_frame(fill: egui::Color32, stroke: egui::Color32) -> egui::Frame {
         .inner_margin(egui::Margin::symmetric(16, 12))
 }
 
+/// One row per rule: name, the message it matches and its action count.
+fn rule_list(ui: &mut Ui, rules: &[vendredi_core::config::Rule]) {
+    if rules.is_empty() {
+        return;
+    }
+    egui::Grid::new(ui.next_auto_id())
+        .num_columns(3)
+        .spacing([24., 6.])
+        .show(ui, |ui| {
+            for r in rules {
+                let version = r.combined_version().unwrap_or_else(|| "any version".into());
+                ui.label(&r.name);
+                ui.label(muted(format!("{} {version}", r.message)).monospace());
+                let n = r.actions.len();
+                ui.label(muted(format!(
+                    "{n} action{}",
+                    if n == 1 { "" } else { "s" }
+                )));
+                ui.end_row();
+            }
+        });
+}
+
 /// The first line of a card: a fixed height, so titles of different sizes
 /// in the two columns share a centre line.
 fn title_row(ui: &mut Ui, contents: impl FnOnce(&mut Ui)) {
@@ -205,7 +228,8 @@ impl Desktop {
     }
 
     pub(super) fn cases(&mut self, ui: &mut Ui) {
-        ui.set_max_width(ui.available_width().min(980.));
+        // The page uses the whole pane: the header, the list and the detail
+        // card share its left and right edges.
         header_row(ui, |ui| {
             ui.heading("Cases");
             ui.add_space(20.);
@@ -222,18 +246,18 @@ impl Desktop {
                 }
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if button(ui, "Import cases…", true).clicked() {
-                    self.import = Some(ImportForm {
-                        source: String::new(),
-                        pending: None,
-                        preview: None,
-                    });
+                if button(ui, "Import cases…", true)
+                    .on_hover_text("Import cases from a folder, a JSON file or an https:// URL")
+                    .clicked()
+                {
+                    self.open_import();
                 }
             });
         });
         ui.add_space(6.);
         ui.label(muted(
-            "A case is a reusable partner scenario. The active case answers the partner's traffic.",
+            "A case is a prepared partner scenario, such as confirming, rejecting or never answering an order. \
+             The active case answers the partner's traffic; without one, the partner's own rules do.",
         ));
         ui.add_space(10.);
         let partner = &self.workspace.partners[self.partner];
@@ -242,7 +266,7 @@ impl Desktop {
             self.case = active.clone();
         }
         let width = ui.available_width();
-        let list = (width * 0.42).clamp(240., 380.);
+        let list = (width * 0.36).clamp(260., 400.);
         ui.horizontal_top(|ui| {
             let top_down = egui::Layout::top_down(egui::Align::Min);
             ui.allocate_ui_with_layout(egui::vec2(list, ui.available_height()), top_down, |ui| {
@@ -260,8 +284,7 @@ impl Desktop {
                         self.case_row(ui, &c.id, &c.name, &c.tags, active == c.id);
                     }
                     if cases.is_empty() {
-                        ui.add_space(6.);
-                        ui.label(muted("No cases are installed under cases/."));
+                        self.no_cases(ui);
                     }
                 });
             });
@@ -284,6 +307,51 @@ impl Desktop {
         });
     }
 
+    fn open_import(&mut self) {
+        self.import = Some(ImportForm {
+            source: String::new(),
+            pending: None,
+            preview: None,
+        });
+    }
+
+    /// The empty list: what cases are for and the two ways to get some.
+    fn no_cases(&mut self, ui: &mut Ui) {
+        ui.add_space(8.);
+        case_frame(BG, LINE).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            title_row(ui, |ui| {
+                ui.label(RichText::new("No cases installed").font(bold(13.)));
+            });
+            ui.label(muted(
+                "Install the starter set of common scenarios, or import cases your team keeps in a folder or repository.",
+            ));
+            ui.add_space(8.);
+            ui.horizontal(|ui| {
+                if button(ui, "Install starter cases", true).clicked() {
+                    self.install_starter_cases();
+                }
+                if button(ui, "Import…", false).clicked() {
+                    self.open_import();
+                }
+            });
+        });
+    }
+
+    fn install_starter_cases(&mut self) {
+        let result = crate::install_starter_cases(&self.root).and_then(|(_, n)| {
+            self.apply_files(&[])?;
+            Ok(n)
+        });
+        self.status = match result {
+            Ok(n) => format!(
+                "Installed {n} starter case{}",
+                if n == 1 { "" } else { "s" }
+            ),
+            Err(e) => format!("Installing starter cases: {e:#}"),
+        };
+    }
+
     fn case_row(&mut self, ui: &mut Ui, id: &str, name: &str, tags: &[String], active: bool) {
         let selected = self.case == id;
         let frame = case_frame(
@@ -303,7 +371,11 @@ impl Desktop {
                 }
             });
             ui.horizontal_wrapped(|ui| {
-                ui.label(muted(id).monospace().size(11.));
+                if id == case::DEFAULT {
+                    ui.label(muted("Built in · the rules set up on the Rules page").size(11.));
+                } else {
+                    ui.label(muted(id).monospace().size(11.));
+                }
                 for tag in tags {
                     ui.label(muted(format!("#{tag}")).size(11.));
                 }
@@ -316,7 +388,7 @@ impl Desktop {
         let partner = self.workspace.partners[self.partner].name.clone();
         if active {
             badge(ui, "Active", BLUE, SURFACE, false);
-            ui.label(muted(format!("for {partner}")));
+            ui.label(muted(format!("Answering {partner}'s traffic")));
         } else if ui
             .add_enabled(
                 compatible,
@@ -331,18 +403,30 @@ impl Desktop {
 
     fn default_case_detail(&mut self, ui: &mut Ui, active: bool) {
         let p = &self.workspace.partners[self.partner];
+        let name = p.name.clone();
+        let rules = p.rules.clone();
         title_row(ui, |ui| {
             ui.label(RichText::new("Partner's own rules").font(bold(17.)));
+            badge(ui, "Built in", SECONDARY_TEXT, SURFACE, false);
         });
         ui.label(muted(format!(
-            "The {} rule{} configured on {} under Rules.",
-            p.rules.len(),
-            if p.rules.len() == 1 { "" } else { "s" },
-            p.name
+            "The rules you set up for {name} on the Rules page. They answer {name} whenever no case is active. \
+             Making a case active swaps in its rules and leaves these untouched."
         )));
         ui.add_space(8.);
+        form::label(ui, "Rules");
+        if rules.is_empty() {
+            ui.label(muted(format!("{name} has no rules yet.")));
+        }
+        rule_list(ui, &rules);
+        ui.add_space(8.);
         header_row(ui, |ui| {
-            self.activate_button(ui, case::DEFAULT, active, true)
+            self.activate_button(ui, case::DEFAULT, active, true);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if button(ui, "Edit rules", false).clicked() {
+                    self.navigate(View::Rules);
+                }
+            });
         });
     }
 
@@ -361,17 +445,7 @@ impl Desktop {
         }
         ui.add_space(8.);
         form::label(ui, "Rules");
-        for r in &c.rules {
-            let version = r.combined_version().unwrap_or_else(|| "any version".into());
-            ui.label(format!(
-                "{} — {} {} · {} action{}",
-                r.name,
-                r.message,
-                version,
-                r.actions.len(),
-                if r.actions.len() == 1 { "" } else { "s" }
-            ));
-        }
+        rule_list(ui, &c.rules);
         if let Some(policy) = c.acknowledge {
             ui.label(muted(format!("Acknowledgement: {policy:?}").to_lowercase()));
         }
@@ -466,6 +540,33 @@ mod tests {
             a.workspace.partners[0].case_id() == case::DEFAULT
         })?;
         assert!(!fs::read_to_string(&file)?.contains("\ncase ="));
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "opens a local workspace listener"]
+    fn install_starter_cases_from_the_empty_list() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        crate::sample(dir.path())?;
+        let file = dir.path().join("vendredi.toml");
+        let config = fs::read_to_string(&file)?.replace(":8180", ":0");
+        // A workspace from before cases: no cases/ folder, none attached.
+        let start = config.find("cases = [").unwrap();
+        let end = start + config[start..].find(']').unwrap() + 1;
+        fs::write(&file, format!("{}{}", &config[..start], &config[end..]))?;
+        fs::remove_dir_all(dir.path().join(case::DIRECTORY))?;
+        let ctx = egui::Context::default();
+        ctx.data_mut(|d| {
+            d.insert_temp(egui::Id::new("test screen size"), egui::vec2(1440., 1200.))
+        });
+        let mut app = Desktop::open(dir.path().into(), &ctx)?;
+        assert!(app.workspace.cases.is_empty());
+        click(&mut app, &ctx, "Cases")?;
+        click(&mut app, &ctx, "Install starter cases")?;
+        assert_eq!(app.status, "Installed 13 starter cases");
+        assert_eq!(app.workspace.cases.len(), 13);
+        click(&mut app, &ctx, "Reject every order")?;
+        assert_eq!(app.case, "reject-orders");
         Ok(())
     }
 
