@@ -24,7 +24,8 @@ pub const DIRECTORY: &str = "cases";
 /// The pseudo case that stands for a partner's own rules.
 pub const DEFAULT: &str = "default";
 
-const FILE_LIMIT: usize = 1024 * 1024;
+/// The largest file a case may contain.
+pub const FILE_LIMIT: usize = 1024 * 1024;
 const FILE_COUNT_LIMIT: usize = 256;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]

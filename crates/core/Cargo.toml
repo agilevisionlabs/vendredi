@@ -16,6 +16,8 @@ turso = { version = "0", default-features = false }
 tokio = { version = "1", features = ["rt", "time"] }
 toml = "0.9"
 toml_edit = "0.25"
+url = "2"
+sha2 = "0.10"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [build-dependencies]
