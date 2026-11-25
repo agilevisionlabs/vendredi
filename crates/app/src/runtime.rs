@@ -10,7 +10,6 @@ use std::{
 };
 use vendredi_core::{
     config::Workspace,
-    edi,
     engine::{Delivery, Engine, HistoryPeriod, Receipt, SystemClock},
 };
 use vendredi_transports::{self as transport, Inbound};
@@ -198,7 +197,7 @@ fn receive(e: &mut Engine, i: Inbound) -> Result<()> {
             return Err(err);
         }
     };
-    let parsed = edi::parse(&i.bytes);
+    let parsed = vendredi_core::interchange::parse(&i.bytes);
     let _ = i.recorded.send(Ok(e.receipt(i.partner, &parsed)));
     e.process(i.partner, id, parsed)
 }

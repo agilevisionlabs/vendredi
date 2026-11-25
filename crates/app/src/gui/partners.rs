@@ -25,6 +25,7 @@ impl PartnerForm {
                 charset: "UNOC".into(),
                 acknowledge: Policy::Always,
                 separators: None,
+                x12: None,
                 rules: vec![],
                 cases: vec![],
                 case: None,

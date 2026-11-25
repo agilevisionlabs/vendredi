@@ -1,6 +1,6 @@
 use crate::{
     case::{self, Case},
-    edi::{self, Syntax},
+    edi::Syntax,
 };
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -30,13 +30,19 @@ pub struct Partner {
     pub name: String,
     #[serde(default, skip_serializing_if = "Standard::is_default")]
     pub standard: Standard,
+    /// `[id, qualifier]`: the `UNB` identification or the `ISA` sender ID and qualifier.
     pub identity: Vec<String>,
+    /// The EDIFACT syntax identifier. Not used by X12 partners.
+    #[serde(default = "default_charset")]
     pub charset: String,
     pub acknowledge: Policy,
     pub receive: Vec<Receive>,
     pub send: SendChannel,
     #[serde(default)]
     pub separators: Option<String>,
+    /// Envelope and acknowledgement settings for X12 partners.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x12: Option<X12>,
     /// The partner's own rules, which form its default case.
     #[serde(default)]
     pub rules: Vec<Rule>,
@@ -50,6 +56,98 @@ pub struct Partner {
     #[serde(skip)]
     pub active: Option<Active>,
 }
+fn default_charset() -> String {
+    "UNOC".into()
+}
+
+/// The X12 acknowledgement a partner sends for each functional group.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub enum GroupAck {
+    #[default]
+    #[serde(rename = "997")]
+    FunctionalAck,
+    #[serde(rename = "999")]
+    ImplementationAck,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct X12 {
+    /// `GS08` for documents and replies, such as `005010` or `004010`.
+    #[serde(default = "X12::default_version")]
+    pub version: String,
+    #[serde(default)]
+    pub acknowledgement: GroupAck,
+    /// Also send a `TA1` interchange acknowledgement.
+    #[serde(default)]
+    pub ta1: bool,
+    /// `ISA15`: `T` for test, `P` for production.
+    #[serde(default = "X12::default_usage")]
+    pub usage: char,
+    /// The partner's `GS02` application code. Defaults to its identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub application: Option<String>,
+    /// The workspace's `GS03` application code. Defaults to its identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_application: Option<String>,
+    /// Element, repetition, component and segment delimiters, such as `*^:~`.
+    /// Use `U` as the repetition separator for versions before 00402.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delimiters: Option<String>,
+}
+impl Default for X12 {
+    fn default() -> Self {
+        Self {
+            version: Self::default_version(),
+            acknowledgement: GroupAck::default(),
+            ta1: false,
+            usage: Self::default_usage(),
+            application: None,
+            workspace_application: None,
+            delimiters: None,
+        }
+    }
+}
+impl X12 {
+    fn default_version() -> String {
+        "005010".into()
+    }
+    fn default_usage() -> char {
+        'T'
+    }
+    pub fn delimiters(&self) -> Result<crate::x12::Delimiters> {
+        let modern = self.version.as_str() >= "004020";
+        let d = match &self.delimiters {
+            None if modern => crate::x12::Delimiters::default(),
+            None => crate::x12::Delimiters {
+                repetition: None,
+                ..Default::default()
+            },
+            Some(text) => {
+                let b = text.as_bytes();
+                ensure!(
+                    b.len() == 4,
+                    "x12.delimiters needs four characters, such as *^:~"
+                );
+                crate::x12::Delimiters {
+                    element: b[0],
+                    repetition: (b[1] != b'U').then_some(b[1]),
+                    component: b[2],
+                    segment: b[3],
+                }
+            }
+        };
+        d.validate()?;
+        ensure!(
+            modern == d.repetition.is_some(),
+            "x12 version {} {} a repetition separator (use U for none)",
+            self.version,
+            if modern { "needs" } else { "cannot use" }
+        );
+        Ok(d)
+    }
+}
+
 /// A case as it runs for one partner. Rule file paths are relative to the
 /// workspace root.
 #[derive(Clone, Debug)]
@@ -119,6 +217,10 @@ impl Partner {
         }
         Ok(())
     }
+    /// The X12 settings, or their defaults.
+    pub fn x12(&self) -> X12 {
+        self.x12.clone().unwrap_or_default()
+    }
     pub fn syntax(&self) -> Result<Syntax> {
         let Some(s) = &self.separators else {
             return Ok(Syntax::default());
@@ -138,6 +240,7 @@ impl Partner {
 pub enum Standard {
     #[default]
     Edifact,
+    X12,
 }
 impl Standard {
     pub fn is_default(&self) -> bool {
@@ -146,6 +249,7 @@ impl Standard {
     pub fn label(self) -> &'static str {
         match self {
             Self::Edifact => "EDIFACT",
+            Self::X12 => "X12",
         }
     }
 }
@@ -201,14 +305,14 @@ pub struct Rule {
     pub actions: Vec<Action>,
 }
 impl Rule {
-    pub fn matches(&self, m: &edi::Message) -> bool {
-        self.message == m.kind()
+    pub fn matches(&self, m: &crate::interchange::MessageInfo) -> bool {
+        self.message == m.kind
             && match (&self.version, &self.release) {
                 (None, None) => true,
                 (version, Some(release)) => {
-                    version.as_ref().is_none_or(|v| v == m.directory()) && release == m.release()
+                    version.as_ref().is_none_or(|v| *v == m.directory) && *release == m.release
                 }
-                (Some(version), None) => *version == m.version() || version == m.directory(),
+                (Some(version), None) => *version == m.version || *version == m.directory,
             }
     }
     /// The version as editors show and write it, merging a legacy `release`.
@@ -291,11 +395,47 @@ impl Workspace {
                 !p.identity.is_empty() && !p.identity[0].is_empty(),
                 "partner identity required"
             );
-            ensure!(
-                matches!(p.charset.as_str(), "UNOA" | "UNOB" | "UNOC"),
-                "unsupported UNB charset"
-            );
-            p.syntax()?;
+            match p.standard {
+                Standard::Edifact => {
+                    ensure!(
+                        matches!(p.charset.as_str(), "UNOA" | "UNOB" | "UNOC"),
+                        "unsupported UNB charset"
+                    );
+                    p.syntax()?;
+                    ensure!(
+                        p.x12.is_none(),
+                        "partner {}: x12 settings need standard = \"x12\"",
+                        p.name
+                    );
+                }
+                Standard::X12 => {
+                    let x = p.x12();
+                    x.delimiters()
+                        .with_context(|| format!("partner {}", p.name))?;
+                    ensure!(
+                        x.version.len() >= 6 && x.version[..6].bytes().all(|b| b.is_ascii_digit()),
+                        "partner {}: x12.version is a GS08 value such as 005010",
+                        p.name
+                    );
+                    ensure!(
+                        matches!(x.usage, 'T' | 'P'),
+                        "partner {}: x12.usage is T or P",
+                        p.name
+                    );
+                    for (who, id) in [("partner", &p.identity), ("workspace", &self.identity)] {
+                        ensure!(
+                            id[0].len() <= 15 && id.get(1).is_none_or(|q| q.len() <= 2),
+                            "the {who} identity of {} does not fit ISA (15-character ID, 2-character qualifier)",
+                            p.name
+                        );
+                    }
+                    ensure!(
+                        p.separators.is_none(),
+                        "partner {}: separators are EDIFACT settings; use x12.delimiters",
+                        p.name
+                    );
+                }
+            }
             ensure!(!p.receive.is_empty(), "partner requires a receive channel");
             for r in &p.receive {
                 match r {
@@ -327,7 +467,8 @@ impl Workspace {
                     let check = (|| -> Result<()> {
                         match action {
                             Action::Document { document } => {
-                                edi::document(
+                                crate::interchange::document(
+                                    p.standard,
                                     &fs::read(self.root.join(document))
                                         .with_context(|| document.display().to_string())?,
                                 )?;
@@ -418,15 +559,16 @@ mod tests {
             include_bytes!("../../../examples/orders/confirmation.edi"),
         )?;
         let w = Workspace::load(dir.path())?;
-        let p = edi::parse(include_bytes!("../../../examples/orders/order.edi"));
-        assert!(w.partners[0].rules[0].matches(&p.interchanges[0].messages[0]));
+        let p = crate::interchange::parse(include_bytes!("../../../examples/orders/order.edi"));
+        assert!(w.partners[0].rules[0].matches(&p.interchanges[0].messages()[0]));
         assert_eq!(w.partners[0].standard, Standard::Edifact);
         Ok(())
     }
     #[test]
     fn rule_versions_cover_combined_and_legacy_forms() {
-        let parsed = edi::parse(include_bytes!("../../../examples/orders/order.edi"));
-        let order = &parsed.interchanges[0].messages[0];
+        let parsed =
+            crate::interchange::parse(include_bytes!("../../../examples/orders/order.edi"));
+        let order = &parsed.interchanges[0].messages()[0];
         let rule = |version: Option<&str>, release: Option<&str>| Rule {
             name: "r".into(),
             message: "ORDERS".into(),

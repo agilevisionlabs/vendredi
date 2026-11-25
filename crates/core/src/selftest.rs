@@ -2,9 +2,10 @@
 //! a temporary workspace and compare what it sends with the expected replies.
 use crate::{
     case::{self, Bundle},
-    config::Workspace,
+    config::{Standard, Workspace},
     edi,
     engine::{Clock, Delivery, Engine},
+    interchange,
 };
 use anyhow::{Context, Result, ensure};
 use std::{
@@ -53,7 +54,7 @@ pub fn run(bundle: &Bundle) -> Result<Vec<Outcome>> {
                 .replies
                 .iter()
                 .map(|p| {
-                    edi::document(&bundle.files[p])?
+                    interchange::document(bundle.case.standard, &bundle.files[p])?
                         .text()
                         .with_context(|| p.display().to_string())
                 })
@@ -76,10 +77,24 @@ fn replies(bundle: &Bundle, e: &case::Expect) -> Result<Vec<String>> {
     let id = &bundle.case.id;
     bundle.write(&dir.path().join(case::DIRECTORY).join(id))?;
     let quote = |v: &[&str]| format!("[{:?}, {:?}]", v[0], v[1]);
+    // X12 checks use the first rule's GS08 version, or 005010.
+    let x12 = match bundle.case.standard {
+        Standard::Edifact => String::new(),
+        Standard::X12 => {
+            let version = bundle
+                .case
+                .rules
+                .iter()
+                .filter_map(|r| r.version.as_deref())
+                .find(|v| v.len() >= 6 && v[..6].bytes().all(|b| b.is_ascii_digit()))
+                .unwrap_or("005010");
+            format!("x12 = {{ version = {version:?} }}\n")
+        }
+    };
     fs::write(
         dir.path().join("vendredi.toml"),
         format!(
-            "listen = \"127.0.0.1:0\"\nidentity = {}\nretention_days = 1\n\n[[partners]]\nname = \"Partner\"\nstandard = {:?}\nidentity = {}\ncharset = \"UNOC\"\nacknowledge = \"always\"\nreceive = [{{ path = \"/partner\" }}]\nsend = {{ directory = \"out\" }}\ncases = [{id:?}]\ncase = {id:?}\n",
+            "listen = \"127.0.0.1:0\"\nidentity = {}\nretention_days = 1\n\n[[partners]]\nname = \"Partner\"\nstandard = {:?}\nidentity = {}\ncharset = \"UNOC\"\nacknowledge = \"always\"\nreceive = [{{ path = \"/partner\" }}]\nsend = {{ directory = \"out\" }}\n{x12}cases = [{id:?}]\ncase = {id:?}\n",
             quote(&WORKSPACE_IDENTITY),
             serde_json::to_value(bundle.case.standard)?
                 .as_str()

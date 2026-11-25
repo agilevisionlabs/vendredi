@@ -4,6 +4,7 @@ pub mod contract;
 pub mod edi;
 pub mod engine;
 pub mod import;
+pub mod interchange;
 pub mod script;
 pub mod selftest;
 pub mod store;

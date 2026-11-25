@@ -166,6 +166,8 @@ impl Group {
 #[derive(Clone, Debug)]
 pub struct Interchange {
     pub header: Segment,
+    /// Interchange acknowledgements (`TA1`) outside any group.
+    pub ta1: Vec<Segment>,
     pub groups: Vec<Group>,
     pub trailer: Option<Segment>,
     pub delimiters: Delimiters,
@@ -300,6 +302,7 @@ pub fn parse(raw: &[u8]) -> Parsed {
         let line_ending = skip_line_ending(raw, &mut pos);
         let mut i = Interchange {
             header,
+            ta1: Vec::new(),
             groups: Vec::new(),
             trailer: None,
             delimiters: d,
@@ -470,6 +473,7 @@ pub fn parse(raw: &[u8]) -> Parsed {
                     }
                     i.trailer = Some(s);
                 }
+                "TA1" if group.is_none() => i.ta1.push(s),
                 _ => match &mut transaction {
                     Some(t) => t.segments.push(s),
                     None => i.findings.push(Finding::new(
@@ -513,12 +517,15 @@ pub fn parse(raw: &[u8]) -> Parsed {
 /// Writes an interchange back with its own delimiters and line endings.
 pub fn write(i: &Interchange) -> Result<Vec<u8>> {
     let mut out = Vec::new();
-    let mut put = |s: &Segment, out: &mut Vec<u8>| -> Result<()> {
+    let put = |s: &Segment, out: &mut Vec<u8>| -> Result<()> {
         s.encode(&i.delimiters, out)?;
         out.extend(&i.line_ending);
         Ok(())
     };
     put(&i.header, &mut out)?;
+    for s in &i.ta1 {
+        put(s, &mut out)?;
+    }
     for g in &i.groups {
         put(&g.header, &mut out)?;
         for t in &g.transactions {
@@ -603,9 +610,8 @@ fn fixed(value: &str, width: usize, what: &str) -> Result<String> {
     Ok(format!("{value:<width$}"))
 }
 
-/// Builds one interchange holding one functional group.
-pub fn envelope(env: &Envelope<'_>, sets: &[Outgoing<'_>]) -> Result<Vec<u8>> {
-    ensure!(!sets.is_empty(), "an interchange needs a transaction set");
+/// The `ISA` segment of an envelope, padded to its fixed widths.
+fn isa(env: &Envelope<'_>) -> Result<Vec<u8>> {
     env.delimiters.validate()?;
     ensure!(
         env.version.len() >= 6 && env.version[..6].bytes().all(|b| b.is_ascii_digit()),
@@ -613,7 +619,7 @@ pub fn envelope(env: &Envelope<'_>, sets: &[Outgoing<'_>]) -> Result<Vec<u8>> {
         env.version
     );
     ensure!(
-        env.control <= 999_999_999 && env.group <= 999_999_999,
+        env.control <= 999_999_999,
         "control numbers have at most nine digits"
     );
     ensure!(matches!(env.usage, 'T' | 'P'), "ISA15 is T or P");
@@ -624,13 +630,6 @@ pub fn envelope(env: &Envelope<'_>, sets: &[Outgoing<'_>]) -> Result<Vec<u8>> {
         "version {} {} a repetition separator",
         env.version,
         if modern { "needs" } else { "cannot use" }
-    );
-    let kinds: Vec<_> = sets.iter().map(|s| functional_id(s.kind)).collect();
-    let gs01 =
-        kinds[0].ok_or_else(|| anyhow::anyhow!("unknown transaction set {}", sets[0].kind))?;
-    ensure!(
-        kinds.iter().all(|k| *k == Some(gs01)),
-        "one group holds transaction sets of one functional identifier"
     );
     let control = format!("{:09}", env.control);
     let d = env.delimiters;
@@ -658,7 +657,27 @@ pub fn envelope(env: &Envelope<'_>, sets: &[Outgoing<'_>]) -> Result<Vec<u8>> {
     out.push(d.segment);
     ensure!(out.len() == ISA_LENGTH, "ISA must be {ISA_LENGTH} bytes");
     out.extend(env.line_ending);
-    let mut put = |s: Segment, out: &mut Vec<u8>| -> Result<()> {
+    Ok(out)
+}
+
+/// Builds one interchange holding one functional group.
+pub fn envelope(env: &Envelope<'_>, sets: &[Outgoing<'_>]) -> Result<Vec<u8>> {
+    ensure!(!sets.is_empty(), "an interchange needs a transaction set");
+    ensure!(
+        env.group <= 999_999_999,
+        "control numbers have at most nine digits"
+    );
+    let kinds: Vec<_> = sets.iter().map(|s| functional_id(s.kind)).collect();
+    let gs01 =
+        kinds[0].ok_or_else(|| anyhow::anyhow!("unknown transaction set {}", sets[0].kind))?;
+    ensure!(
+        kinds.iter().all(|k| *k == Some(gs01)),
+        "one group holds transaction sets of one functional identifier"
+    );
+    let control = format!("{:09}", env.control);
+    let d = env.delimiters;
+    let mut out = isa(env)?;
+    let put = |s: Segment, out: &mut Vec<u8>| -> Result<()> {
         s.encode(&d, out)?;
         out.extend(env.line_ending);
         Ok(())
@@ -793,6 +812,119 @@ pub fn acknowledgement(i: &Interchange, group: &Group, reject_all: bool) -> Vec<
         ak9.into_iter().map(|v| vec![vec![v]]).collect(),
     ));
     body
+}
+
+/// A static document or expected reply: one `ST`…`SE` transaction set with
+/// the default delimiters (`*`, `^`, `:` and `~`).
+pub fn document(raw: &[u8]) -> Result<Transaction> {
+    let d = Delimiters::default();
+    let mut pos = 0;
+    let mut segments = Vec::new();
+    loop {
+        skip_line_ending(raw, &mut pos);
+        if pos >= raw.len() {
+            break;
+        }
+        let s = segment(raw, &mut pos, &d)
+            .map_err(|f| anyhow::anyhow!("{} at byte {}", f.text, f.offset))?;
+        segments.push(s);
+    }
+    ensure!(
+        segments.len() >= 2 && segments[0].tag == "ST" && segments.last().unwrap().tag == "SE",
+        "expected one ST…SE transaction set"
+    );
+    ensure!(
+        segments[1..segments.len() - 1]
+            .iter()
+            .all(|s| !matches!(s.tag.as_str(), "ISA" | "IEA" | "GS" | "GE" | "ST" | "SE")),
+        "nested envelope in document"
+    );
+    ensure!(
+        !segments[0].at(1).is_empty(),
+        "missing transaction set identifier"
+    );
+    Ok(Transaction { segments })
+}
+
+/// A transaction set as document text with the default delimiters.
+pub fn text(segments: &[Segment]) -> Result<String> {
+    let mut out = Vec::new();
+    for s in segments {
+        s.encode(&Delimiters::default(), &mut out)?;
+    }
+    Ok(latin1(&out))
+}
+
+/// Segments for display: the wire text and decoded elements, one entry per
+/// component (repetitions are joined back with the repetition separator).
+pub fn lines(raw: &[u8]) -> Vec<Value> {
+    let mut lines = Vec::new();
+    let mut pos = 0;
+    skip_line_ending(raw, &mut pos);
+    let Ok(d) = delimiters(&raw[pos..]) else {
+        return vec![json!({"tag":"","raw":latin1(raw),"elements":[]})];
+    };
+    while pos < raw.len() {
+        let start = pos;
+        let decoded = segment(raw, &mut pos, &d);
+        if decoded.is_err() {
+            // An unterminated or invalid tail is shown as one raw line.
+            pos = raw.len();
+        }
+        let end = pos;
+        skip_line_ending(raw, &mut pos);
+        let (tag, elements) = match decoded {
+            Ok(s) => {
+                let rep = latin1(&[d.repetition.unwrap_or(b'^')]);
+                let elements: Vec<Vec<String>> = s
+                    .elements
+                    .iter()
+                    .map(|e| match e.as_slice() {
+                        [single] => single.clone(),
+                        many => vec![
+                            many.iter()
+                                .map(|r| r.join(&latin1(&[d.component])))
+                                .collect::<Vec<_>>()
+                                .join(&rep),
+                        ],
+                    })
+                    .collect();
+                (s.tag, elements)
+            }
+            Err(_) => (String::new(), Vec::new()),
+        };
+        lines.push(json!({"tag":tag,"raw":latin1(&raw[start..end]),"elements":elements}));
+    }
+    lines
+}
+
+/// An interchange holding only a `TA1` segment.
+pub fn ta1_interchange(env: &Envelope<'_>, ta1: &Segment) -> Result<Vec<u8>> {
+    let mut out = isa(env)?;
+    ta1.encode(&env.delimiters, &mut out)?;
+    out.extend(env.line_ending);
+    let control = format!("{:09}", env.control);
+    Segment::simple("IEA", &["0", &control]).encode(&env.delimiters, &mut out)?;
+    out.extend(env.line_ending);
+    Ok(out)
+}
+
+/// The body of a 999 acknowledging one group. It reports the same outcome as
+/// the 997, with `IK5` in place of `AK5`.
+pub fn implementation_acknowledgement(
+    i: &Interchange,
+    group: &Group,
+    reject_all: bool,
+) -> Vec<Segment> {
+    acknowledgement(i, group, reject_all)
+        .into_iter()
+        .map(|mut s| {
+            if s.tag == "AK5" {
+                s.tag = "IK5".into();
+            }
+            s
+        })
+        .collect()
 }
 
 fn element(e: &Element) -> Value {

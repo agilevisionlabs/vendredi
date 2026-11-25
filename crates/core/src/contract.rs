@@ -74,6 +74,9 @@ struct Built {
     agency: Option<String>,
     #[serde(default)]
     association: Option<String>,
+    /// The X12 `ST03` implementation convention reference.
+    #[serde(default)]
+    implementation: Option<String>,
     /// Present when a script sends an inbound message object back. The engine
     /// always assigns its own reference.
     #[serde(default)]
@@ -98,9 +101,51 @@ fn text(value: &Value, what: &str) -> Result<String> {
 const ENVELOPE_TAGS: [&str; 7] = ["UNA", "UNB", "UNG", "UNH", "UNT", "UNE", "UNZ"];
 
 /// Converts a message a script built with `api.build` into the EDI model.
-pub fn built(value: &Value, standard: Standard) -> Result<Message> {
+pub fn built(value: &Value, standard: Standard) -> Result<crate::interchange::Outgoing> {
+    use crate::interchange::{Outgoing, X12Message};
     let b: Built = serde_json::from_value(value.clone()).context("invalid message object")?;
-    let Standard::Edifact = standard;
+    if standard == Standard::X12 {
+        ensure!(
+            b.agency.is_none() && b.association.is_none(),
+            "agency and association are EDIFACT settings"
+        );
+        ensure!(
+            !b.kind.is_empty() && b.kind.bytes().all(|c| c.is_ascii_digit()),
+            "expected an X12 transaction set such as 855, found {:?}",
+            b.kind
+        );
+        ensure!(
+            b.version.len() >= 6 && b.version[..6].bytes().all(|c| c.is_ascii_digit()),
+            "expected an X12 version such as 005010, found {:?}",
+            b.version
+        );
+        let body = b
+            .segments
+            .iter()
+            .enumerate()
+            .map(|(n, items)| {
+                let s = crate::x12::segment_from_view(items)
+                    .with_context(|| format!("segment {}", n + 1))?;
+                ensure!(
+                    !matches!(s.tag.as_str(), "ISA" | "IEA" | "GS" | "GE" | "ST" | "SE"),
+                    "segment {} is an envelope segment ({}). The engine writes envelopes",
+                    n + 1,
+                    s.tag
+                );
+                Ok(s)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        return Ok(Outgoing::X12(X12Message {
+            kind: b.kind,
+            version: Some(b.version),
+            implementation: b.implementation,
+            body,
+        }));
+    }
+    edifact(b).map(Outgoing::Edifact)
+}
+
+fn edifact(b: Built) -> Result<Message> {
     ensure!(
         !b.kind.is_empty() && b.kind.bytes().all(|c| c.is_ascii_alphanumeric()),
         "invalid message type {:?}",
@@ -188,7 +233,9 @@ mod tests {
                 ["DTM", ["137", "20261124", "102"]]
             ])
         );
-        let rebuilt = built(m, Standard::Edifact)?;
+        let crate::interchange::Outgoing::Edifact(rebuilt) = built(m, Standard::Edifact)? else {
+            panic!("expected EDIFACT");
+        };
         for (a, b) in rebuilt.segments[1..3]
             .iter()
             .zip(&i.messages[0].segments[1..3])
@@ -217,11 +264,13 @@ mod tests {
         for v in bad {
             assert!(built(&v, Standard::Edifact).is_err(), "{v}");
         }
-        let m = built(
+        let crate::interchange::Outgoing::Edifact(m) = built(
             &json!({"type":"ORDRSP","version":"D:01B","segments":[["QTY",["21",5]],["FTX",null,"Café"]]}),
             Standard::Edifact,
         )
-        .unwrap();
+        .unwrap() else {
+            panic!("expected EDIFACT");
+        };
         assert_eq!(m.version(), "D01B");
         assert_eq!(m.segments[1].elements, [vec!["21", "5"]]);
         assert_eq!(m.segments[2].at(1, 0), "Café");

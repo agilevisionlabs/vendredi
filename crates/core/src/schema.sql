@@ -9,7 +9,8 @@ CREATE TABLE IF NOT EXISTS interchanges(
 );
 CREATE TABLE IF NOT EXISTS messages(
  id INTEGER PRIMARY KEY, interchange INTEGER NOT NULL, type TEXT NOT NULL, version TEXT NOT NULL,
- release TEXT NOT NULL, reference TEXT NOT NULL, segment_count INTEGER NOT NULL
+ release TEXT NOT NULL, reference TEXT NOT NULL, segment_count INTEGER NOT NULL,
+ grp TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS findings(
  id INTEGER PRIMARY KEY, transfer INTEGER NOT NULL, interchange INTEGER, severity TEXT NOT NULL,

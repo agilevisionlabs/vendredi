@@ -3,10 +3,7 @@
 //! A case holds rules, the documents and scripts they use, sample inbound
 //! messages and optional expected replies. It never holds identities or
 //! channels, so one case attaches to any partner of the same standard.
-use crate::{
-    config::{Action, Policy, Rule, Standard},
-    edi,
-};
+use crate::config::{Action, Policy, Rule, Standard};
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -278,7 +275,6 @@ impl Bundle {
                 _ => bail!("each expect entry names either a sample or an initiate"),
             }
         }
-        let Standard::Edifact = c.standard;
         for rule in &c.rules {
             ensure!(!rule.name.trim().is_empty(), "every rule needs a name");
             ensure!(
@@ -289,7 +285,7 @@ impl Bundle {
         }
         for (path, script) in c.references() {
             if !script {
-                edi::document(&self.files[&path])
+                crate::interchange::document(c.standard, &self.files[&path])
                     .with_context(|| format!("{} is not a single message", path.display()))?;
             }
         }

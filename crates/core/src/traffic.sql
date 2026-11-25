@@ -6,12 +6,12 @@ WITH sources AS (
  ) END AS source FROM transfers t
 ), envelopes AS (
  SELECT transfer, group_concat(reference, ', ') AS refs,
-        max(ack_status='rejected') AS rejected, max(ack_status='accepted') AS accepted,
+        max(ack_status IN ('rejected','partial')) AS rejected, max(ack_status='accepted') AS accepted,
         max(ack_requested='1') AS requested
  FROM interchanges GROUP BY transfer
 ), types AS (
  SELECT i.transfer, group_concat(m.type, ', ') AS kinds,
-        min(m.version || '.' || m.release) AS version
+        min(CASE WHEN m.release='' THEN m.version ELSE m.version || '.' || m.release END) AS version
  FROM messages m JOIN interchanges i ON m.interchange=i.id GROUP BY i.transfer
 ), errors AS (
  SELECT transfer, count(*) AS amount FROM findings GROUP BY transfer

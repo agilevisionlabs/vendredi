@@ -53,7 +53,7 @@ fn compile(cx: &mut Context, source: &str, function: &str, input_json: &str) -> 
                 }}
                 if (!Array.isArray(segments)) throw new TypeError("api.build expects an array of segments");
                 const message = {{ type: String(type), version: String(version), segments }};
-                for (const key of ["agency", "association"]) {{
+                for (const key of ["agency", "association", "implementation"]) {{
                     if (options && options[key] !== undefined) message[key] = String(options[key]);
                 }}
                 return message;

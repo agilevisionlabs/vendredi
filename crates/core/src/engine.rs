@@ -1,7 +1,8 @@
 use crate::{
     config::*,
     contract,
-    edi::{self, Finding, Interchange, Message},
+    edi::{self, Finding},
+    interchange::{self, AckInfo, Interchange, Outgoing},
     script,
     store::Store,
 };
@@ -157,6 +158,13 @@ impl Engine {
         lock.try_lock().context("workspace is already in use")?;
         let store = Store::open(&dir.join("vendredi.db"))?;
         store.batch(include_str!("schema.sql"))?;
+        // 0.1 databases predate the X12 functional-group column.
+        if store.query("SELECT grp FROM messages LIMIT 0", ()).is_err() {
+            store.exec(
+                "ALTER TABLE messages ADD COLUMN grp TEXT NOT NULL DEFAULT ''",
+                (),
+            )?;
+        }
         for p in &workspace.partners {
             store.exec(
                 "INSERT OR IGNORE INTO partner_state VALUES (?,0,'{}')",
@@ -334,7 +342,7 @@ impl Engine {
         let replay = self
             .receive(p, &bytes, metadata, None)?
             .context("replay not recorded")?;
-        self.process(p, replay, edi::parse(&bytes))
+        self.process(p, replay, interchange::parse(&bytes))
     }
     pub fn detail(&self, id: i64) -> Result<Value> {
         let rows = self.store.query(
@@ -372,7 +380,7 @@ impl Engine {
         let findings=self.store.query("SELECT severity,code,offset,text FROM findings WHERE transfer=? ORDER BY offset,id",[id])?
             .iter().map(|r|Ok(json!({"severity":r.get::<String>(0)?,"code":r.get::<String>(1)?,"offset":r.get::<i64>(2)?,"text":r.get::<String>(3)?}))).collect::<Result<Vec<_>>>()?;
         Ok(
-            json!({"transfer":id,"segments":edi::lines(&bytes),"findings":findings,"interchanges":summaries,"status":r.get::<String>(2)?,"metadata":r.get::<String>(1)?,"bytes":bytes,"raw":edi::latin1(&bytes),"parsed":edi::parse(&bytes),"events":events}),
+            json!({"transfer":id,"segments":interchange::lines(&bytes),"findings":findings,"interchanges":summaries,"status":r.get::<String>(2)?,"metadata":r.get::<String>(1)?,"bytes":bytes,"raw":edi::latin1(&bytes),"parsed":(interchange::detect(&bytes) != Some(Standard::X12)).then(|| edi::parse(&bytes)),"events":events}),
         )
     }
     pub fn partner(&self, name: &str) -> Result<usize> {
@@ -422,12 +430,12 @@ impl Engine {
         )?;
         Ok(Some(id))
     }
-    pub fn receipt(&self, p: usize, parsed: &edi::Parsed) -> Receipt {
-        for m in parsed.interchanges.iter().flat_map(|i| &i.messages) {
+    pub fn receipt(&self, p: usize, parsed: &interchange::Parsed) -> Receipt {
+        for m in parsed.interchanges.iter().flat_map(|i| i.messages()) {
             if let Some(rule) = self.workspace.partners[p]
                 .scenario()
                 .iter()
-                .find(|r| r.matches(m))
+                .find(|r| r.matches(&m))
             {
                 for a in &rule.actions {
                     match a {
@@ -455,14 +463,13 @@ impl Engine {
         Ok(())
     }
     fn summary(s: &Store, transfer: i64, i: &Interchange) -> Result<(i64, Vec<i64>)> {
-        let h = &i.header;
+        let first = |v: Vec<String>| v.into_iter().next().unwrap_or_default();
         let id=s.exec("INSERT INTO interchanges(transfer,sender,recipient,reference,test_flag,ack_requested,ack_status) VALUES (?,?,?,?,?,?,'unknown')",
-        (transfer,h.at(1,0),h.at(2,0),h.at(4,0),h.at(10,0),h.at(8,0)))?;
+        (transfer,first(i.sender()),first(i.recipient()),i.reference(),i.test_flag(),if i.ack_requested() {"1"} else {""}))?;
         let mut messages = Vec::new();
-        for m in &i.messages {
-            let h = m.header();
-            messages.push(s.exec("INSERT INTO messages(interchange,type,version,release,reference,segment_count) VALUES (?,?,?,?,?,?)",
-            (id,m.kind(),h.at(1,1),h.at(1,2),h.at(0,0),m.segments.len() as i64))?);
+        for m in i.messages() {
+            messages.push(s.exec("INSERT INTO messages(interchange,type,version,release,reference,segment_count,grp) VALUES (?,?,?,?,?,?,?)",
+            (id,m.kind.as_str(),m.directory.as_str(),m.release.as_str(),m.reference.as_str(),m.segments as i64,m.group.as_str()))?);
         }
         Ok((id, messages))
     }
@@ -500,29 +507,47 @@ impl Engine {
             faults: Vec::new(),
         })
     }
-    pub fn process(&mut self, p: usize, id: i64, parsed: edi::Parsed) -> Result<()> {
+    pub fn process(&mut self, p: usize, id: i64, parsed: interchange::Parsed) -> Result<()> {
         self.findings(id, None, &parsed.findings)?;
         for mut i in parsed.interchanges {
             let partner = &self.workspace.partners[p];
-            if i.header.elements.get(1) != Some(&self.workspace.identity)
-                || i.header.elements.get(2) != Some(&partner.identity)
-            {
-                i.findings.push(Finding::new(
+            let offset = i.offset();
+            if i.standard() != partner.standard {
+                let text = format!(
+                    "{} interchange for the {} partner {}",
+                    i.standard().label(),
+                    partner.standard.label(),
+                    partner.name
+                );
+                i.findings_mut()
+                    .push(Finding::new("standard", offset, text));
+            }
+            let qualified = |expected: &[String], found: Vec<String>| match i.standard() {
+                Standard::Edifact => found == expected,
+                // ISA always carries a qualifier; an identity without one means ZZ.
+                Standard::X12 => {
+                    found.first() == expected.first()
+                        && found.get(1).map(String::as_str)
+                            == Some(expected.get(1).map_or("ZZ", String::as_str))
+                }
+            };
+            let identities_match = qualified(&self.workspace.identity, i.sender())
+                && qualified(&partner.identity, i.recipient());
+            if !identities_match {
+                i.findings_mut().push(Finding::new(
                     "identity",
-                    i.header.offset,
-                    "UNB identities do not match receive channel",
+                    offset,
+                    "interchange identities do not match receive channel",
                 ));
             }
-            if i.header.at(0, 0) != partner.charset {
-                i.findings.push(Finding::new(
-                    "charset",
-                    i.header.offset,
-                    "unexpected character set",
-                ));
+            let charset_differs = i.charset().is_some_and(|c| c != partner.charset);
+            if charset_differs {
+                i.findings_mut()
+                    .push(Finding::new("charset", offset, "unexpected character set"));
             }
             let (iid, mids) = self.store.transaction(|s| Self::summary(s, id, &i))?;
-            let rules: Vec<_> = i
-                .messages
+            let messages = i.messages();
+            let rules: Vec<_> = messages
                 .iter()
                 .map(|m| partner.scenario().iter().find(|r| r.matches(m)).cloned())
                 .collect();
@@ -539,15 +564,17 @@ impl Engine {
                 })
                 .collect();
             let ack = partner.policy() == Policy::Always
-                || (partner.policy() == Policy::Requested && i.header.at(8, 0) == "1");
-            let accepted = i.findings.is_empty() && !faults.contains(&Fault::Reject);
-            self.findings(id, Some(iid), &i.findings)?;
-            self.event("validated",Some(id),json!({"interchange":iid,"accepted":accepted,"messages":mids.len(),"findings":i.findings.len()}))?;
+                || (partner.policy() == Policy::Requested && i.ack_requested());
+            let accepted = i.findings().is_empty() && !faults.contains(&Fault::Reject);
+            let wrong_standard = i.standard() != partner.standard;
+            self.findings(id, Some(iid), i.findings())?;
+            self.event("validated",Some(id),json!({"interchange":iid,"accepted":accepted,"messages":mids.len(),"findings":i.findings().len()}))?;
             let i = Arc::new(i);
             if ack
+                && !wrong_standard
                 && !faults.contains(&Fault::SuppressAck)
-                && !i.messages.iter().any(|m| m.kind() == "CONTRL")
-                && !i.header.at(4, 0).is_empty()
+                && !i.carries_acknowledgement()
+                && !i.reference().is_empty()
             {
                 let mut t = self.task(
                     p,
@@ -557,15 +584,17 @@ impl Engine {
                     vec![],
                     Some(i.clone()),
                 )?;
-                self.send(&mut t, &edi::contrl(&i, accepted))?;
+                for m in interchange::acknowledge(&self.workspace.partners[p], &i, accepted) {
+                    self.send(&mut t, &m)?;
+                }
             }
             if !accepted {
                 continue;
             }
-            for ((m, mid), rule) in i.messages.iter().zip(mids).zip(rules) {
-                if m.kind() == "CONTRL" {
-                    self.correlate(p, id, m)?;
-                }
+            for ack in i.acknowledgements() {
+                self.correlate(p, id, &ack)?;
+            }
+            for ((m, mid), rule) in messages.iter().zip(mids).zip(rules) {
                 if let Some(rule) = rule {
                     let t = self.task(
                         p,
@@ -577,56 +606,61 @@ impl Engine {
                     )?;
                     self.execute(t)?;
                 } else {
-                    self.event("no_match", Some(id), json!({"message":mid,"type":m.kind()}))?;
+                    self.event("no_match", Some(id), json!({"message":mid,"type":m.kind}))?;
                 }
             }
         }
         Ok(())
     }
-    fn correlate(&mut self, p: usize, root: i64, m: &Message) -> Result<()> {
-        let Some(uci) = m.segments.iter().find(|s| s.tag == "UCI") else {
-            return Ok(());
-        };
+    fn correlate(&mut self, p: usize, root: i64, ack: &AckInfo) -> Result<()> {
         let partner = &self.workspace.partners[p];
-        let rows=self.store.query("SELECT i.id FROM interchanges i JOIN transfers t ON t.id=i.transfer WHERE t.direction='out' AND t.partner=? AND i.reference=?",
-            (partner.name.as_str(),uci.at(0,0)))?;
-        if rows.len() == 1
-            && uci.elements.get(1) == Some(&partner.identity)
-            && uci.elements.get(2) == Some(&self.workspace.identity)
-        {
+        let sql = if ack.numeric {
+            "SELECT i.id FROM interchanges i JOIN transfers t ON t.id=i.transfer WHERE t.direction='out' AND t.partner=? AND CAST(i.reference AS INTEGER)=CAST(? AS INTEGER)"
+        } else {
+            "SELECT i.id FROM interchanges i JOIN transfers t ON t.id=i.transfer WHERE t.direction='out' AND t.partner=? AND i.reference=?"
+        };
+        let rows = self
+            .store
+            .query(sql, (partner.name.as_str(), ack.reference.as_str()))?;
+        let parties_match = ack
+            .parties
+            .as_ref()
+            .is_none_or(|(from, to)| *from == partner.identity && *to == self.workspace.identity);
+        if rows.len() == 1 && parties_match {
             let iid = rows[0].get::<i64>(0)?;
-            let status = match uci.at(3, 0) {
-                "7" | "8" => "accepted",
-                "4" => "rejected",
-                _ => "unknown",
-            };
             self.store.exec(
                 "UPDATE interchanges SET ack_status=? WHERE id=?",
-                (status, iid),
+                (ack.status, iid),
             )?;
             self.event(
                 "acknowledged",
                 Some(root),
-                json!({"interchange":iid,"status":status}),
+                json!({"interchange":iid,"status":ack.status}),
             )?;
         } else {
             self.event(
                 "unresolved_ack",
                 Some(root),
-                json!({"reference":uci.at(0,0),"candidates":rows.len()}),
+                json!({"reference":ack.reference,"candidates":rows.len()}),
             )?;
         }
         Ok(())
     }
-    fn send(&mut self, t: &mut Task, m: &Message) -> Result<()> {
+    fn send(&mut self, t: &mut Task, m: &Outgoing) -> Result<()> {
         let partner = &self.workspace.partners[t.partner];
         let name = partner.name.as_str();
         let now = self.clock.millis();
         let (id,bytes,root)=self.store.transaction(|s|{
             let last=s.query("SELECT reference FROM partner_state WHERE partner=?",[name])?[0].get::<i64>(0)?;
             let next=if t.faults.contains(&Fault::DuplicateReference) && last>0 {last} else {last.checked_add(1).context("reference counter exhausted")?};
-            let mut bytes=edi::envelope(&edi::Envelope {syntax:partner.syntax()?,charset:&partner.charset,sender:&partner.identity,recipient:&self.workspace.identity,reference:&next.to_string(),
-                time:DateTime::from_timestamp_millis(now).context("invalid clock")?,wrong_count:t.faults.contains(&Fault::WrongCount)},m)?;
+            let x = partner.x12();
+            let applications = (
+                x.application.as_deref().unwrap_or(&partner.identity[0]),
+                x.workspace_application.as_deref().unwrap_or(&self.workspace.identity[0]),
+            );
+            let route = interchange::Route { sender: &partner.identity, recipient: &self.workspace.identity, applications };
+            let mut bytes=interchange::envelope(partner,&route,&next.to_string(),
+                DateTime::from_timestamp_millis(now).context("invalid clock")?,t.faults.contains(&Fault::WrongCount),m)?;
             if t.faults.contains(&Fault::Malformed){bytes.pop();}
             s.exec("UPDATE partner_state SET reference=? WHERE partner=?",(next,name))?;
             let metadata = partner.send.metadata();
@@ -634,7 +668,7 @@ impl Engine {
                 (Self::allocate_transfer(s)?,t.root,now,name,metadata.to_string(),bytes.clone(),t.execution))?;
             let root=t.root.unwrap_or(id);
             if t.root.is_none(){s.exec("UPDATE transfers SET root=? WHERE id=?",(root,id))?;s.exec("UPDATE executions SET root=? WHERE id=?",(root,t.execution))?;}
-            if let Some(i)=edi::parse(&bytes).interchanges.first(){Self::summary(s,id,i)?;}
+            if let Some(i)=interchange::parse(&bytes).interchanges.first(){Self::summary(s,id,i)?;}
             Ok((id,bytes,root))
         })?;
         t.root = Some(root);
@@ -709,7 +743,11 @@ impl Engine {
             Action::Fault { fault } => t.faults.push(*fault),
             Action::Delay { .. } => unreachable!(),
             Action::Document { document } => {
-                let m = edi::document(&fs::read(self.workspace.root.join(document))?)?;
+                let standard = self.workspace.partners[t.partner].standard;
+                let m = interchange::document(
+                    standard,
+                    &fs::read(self.workspace.root.join(document))?,
+                )?;
                 self.send(t, &m)?;
             }
             Action::Script {
@@ -724,16 +762,13 @@ impl Engine {
                 let reference = rows[0].get::<i64>(0)?;
                 let state: BTreeMap<_, _> = serde_json::from_str(&rows[0].get::<String>(1)?)?;
                 let standard = self.workspace.partners[t.partner].standard;
-                let view = t
-                    .inbound
-                    .as_deref()
-                    .map_or(Value::Null, |i| contract::interchange(i, standard));
+                let view = t.inbound.as_deref().map_or(Value::Null, Interchange::view);
                 let effects = script::run(
                     &script::read_source(self.workspace.root.join(path))?,
                     function,
                     &script::Input {
                         interchange: &view,
-                        legacy: t.inbound.as_deref(),
+                        legacy: t.inbound.as_deref().and_then(Interchange::legacy),
                         state: &state,
                         reference,
                         now: self.clock.millis(),
@@ -745,7 +780,12 @@ impl Engine {
                     .enumerate()
                     .map(|(n, send)| {
                         match send {
-                            Value::String(raw) => edi::script_document(raw),
+                            Value::String(raw) if standard == Standard::Edifact => {
+                                edi::script_document(raw).map(Outgoing::Edifact)
+                            }
+                            Value::String(_) => {
+                                anyhow::bail!("send a message from api.build to an X12 partner")
+                            }
                             other => contract::built(other, standard),
                         }
                         .with_context(|| format!("script send {}", n + 1))
@@ -778,8 +818,14 @@ impl Engine {
                     )?;
                 }
                 if effects.acknowledge {
-                    let m = edi::contrl(t.inbound.as_ref().unwrap(), true);
-                    self.send(t, &m)?;
+                    let inbound = t.inbound.clone().unwrap();
+                    for m in interchange::acknowledge(
+                        &self.workspace.partners[t.partner],
+                        &inbound,
+                        true,
+                    ) {
+                        self.send(t, &m)?;
+                    }
                 }
                 for m in messages {
                     self.send(t, &m)?;
@@ -855,29 +901,37 @@ impl Engine {
             .join(crate::case::DIRECTORY)
             .join(&id)
             .join(document);
-        let message = edi::document(&fs::read(&path).with_context(|| path.display().to_string())?)?;
+        let message = interchange::document(
+            partner.standard,
+            &fs::read(&path).with_context(|| path.display().to_string())?,
+        )?;
         let next = self.store.query(
             "SELECT last_id+1 FROM transfer_sequence WHERE singleton=1",
             (),
         )?[0]
             .get::<i64>(0)?;
-        let bytes = edi::envelope(
-            &edi::Envelope {
-                syntax: partner.syntax()?,
-                charset: &partner.charset,
-                sender: &self.workspace.identity,
-                recipient: &partner.identity,
-                reference: &format!("S{next}"),
-                time: DateTime::from_timestamp_millis(self.clock.millis())
-                    .context("invalid clock")?,
-                wrong_count: false,
-            },
-            &message,
-        )?;
+        let x = partner.x12();
+        let applications = (
+            x.workspace_application
+                .as_deref()
+                .unwrap_or(&self.workspace.identity[0]),
+            x.application.as_deref().unwrap_or(&partner.identity[0]),
+        );
+        let route = interchange::Route {
+            sender: &self.workspace.identity,
+            recipient: &partner.identity,
+            applications,
+        };
+        let reference = match partner.standard {
+            Standard::Edifact => format!("S{next}"),
+            Standard::X12 => next.to_string(),
+        };
+        let time = DateTime::from_timestamp_millis(self.clock.millis()).context("invalid clock")?;
+        let bytes = interchange::envelope(partner, &route, &reference, time, false, &message)?;
         let transfer = self
             .receive(p, &bytes, json!({"case":id,"sample":sample}), None)?
             .context("sample not recorded")?;
-        self.process(p, transfer, edi::parse(&bytes))?;
+        self.process(p, transfer, interchange::parse(&bytes))?;
         Ok(transfer)
     }
     /// Runs a partner-initiated send defined by the active case.
@@ -972,7 +1026,7 @@ mod tests {
     }
     fn input(e: &mut Engine, p: usize, bytes: &[u8]) -> Result<i64> {
         let id = e.receive(p, bytes, json!({}), None)?.unwrap();
-        e.process(p, id, edi::parse(bytes))?;
+        e.process(p, id, interchange::parse(bytes))?;
         Ok(id)
     }
     #[test]
@@ -1070,7 +1124,7 @@ mod tests {
             let mut engine =
                 Engine::open(w, Arc::new(Manual(AtomicI64::new(date.timestamp_millis()))))?;
             let id = engine.receive(0, ORDER, metadata, None)?.unwrap();
-            engine.process(0, id, edi::parse(ORDER))?;
+            engine.process(0, id, interchange::parse(ORDER))?;
             let replies = engine.take_deliveries();
             assert_eq!(replies.len(), 2);
             for (d, expected) in replies.iter().zip([
