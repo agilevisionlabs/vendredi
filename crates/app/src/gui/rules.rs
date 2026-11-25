@@ -311,7 +311,7 @@ impl Desktop {
 
     pub(super) fn rules(&mut self, ui: &mut Ui) {
         ui.set_max_width(ui.available_width().min(820.));
-        ui.horizontal(|ui| {
+        header_row(ui, |ui| {
             ui.heading("Rules");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if button(ui, "Add rule", true).clicked() {

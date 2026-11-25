@@ -1,6 +1,6 @@
 use super::*;
 use crate::cases::{describe, preview};
-use egui::{ComboBox, RichText, ScrollArea, Ui};
+use egui::{RichText, ScrollArea, Ui};
 use vendredi_core::{
     case::{self, Case},
     import::{self, Change, Incoming},
@@ -185,8 +185,21 @@ impl Desktop {
 
     pub(super) fn cases(&mut self, ui: &mut Ui) {
         ui.set_max_width(ui.available_width().min(980.));
-        ui.horizontal(|ui| {
+        header_row(ui, |ui| {
             ui.heading("Cases");
+            ui.add_space(20.);
+            form::label(ui, "Partner");
+            // A menu button centres like the other buttons in the row;
+            // ComboBox positions itself against the row's full height.
+            let current = self.workspace.partners[self.partner].name.clone();
+            ui.menu_button(format!("{current}  ⏷"), |ui| {
+                for (i, p) in self.workspace.partners.iter().enumerate() {
+                    if ui.selectable_label(i == self.partner, &p.name).clicked() {
+                        self.partner = i;
+                        ui.close();
+                    }
+                }
+            });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if button(ui, "Import cases…", true).clicked() {
                     self.import = Some(ImportForm {
@@ -197,16 +210,7 @@ impl Desktop {
                 }
             });
         });
-        ui.horizontal(|ui| {
-            form::label(ui, "Partner");
-            ComboBox::from_id_salt("case partner")
-                .selected_text(&self.workspace.partners[self.partner].name)
-                .show_ui(ui, |ui| {
-                    for (i, p) in self.workspace.partners.iter().enumerate() {
-                        ui.selectable_value(&mut self.partner, i, &p.name);
-                    }
-                });
-        });
+        ui.add_space(6.);
         ui.label(muted(
             "A case is a reusable partner scenario. The active case answers the partner's traffic.",
         ));
@@ -265,16 +269,21 @@ impl Desktop {
             .inner_margin(egui::Margin::symmetric(10, 8));
         frame.show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                if ui.link(RichText::new(name).font(bold(13.))).clicked() {
-                    self.case = id.into();
-                }
-                if active {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        badge(ui, "Active", BLUE, SURFACE, false);
-                    });
-                }
-            });
+            let row = egui::vec2(ui.available_width(), 22.);
+            ui.allocate_ui_with_layout(
+                row,
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    if ui.link(RichText::new(name).font(bold(13.))).clicked() {
+                        self.case = id.into();
+                    }
+                    if active {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            badge(ui, "Active", BLUE, SURFACE, false);
+                        });
+                    }
+                },
+            );
             ui.horizontal_wrapped(|ui| {
                 ui.label(muted(id).monospace().size(11.));
                 for tag in tags {

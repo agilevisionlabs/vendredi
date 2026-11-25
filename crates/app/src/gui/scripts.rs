@@ -327,7 +327,7 @@ impl Desktop {
     }
 
     pub(super) fn scripts(&mut self, ui: &mut Ui) {
-        ui.horizontal(|ui| {
+        header_row(ui, |ui| {
             ui.heading("Scripts");
             if button(ui, "Add script", true).clicked() {
                 self.script_form = Some(ScriptForm::new(&self.workspace, self.partner));

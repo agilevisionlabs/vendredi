@@ -200,6 +200,14 @@ pub(super) fn line(ui: &Ui, a: Pos2, b: Pos2) {
         .line_segment([a, b], Stroke::new(1.0_f32, LINE));
 }
 pub(super) use vendredi_core::engine::local_time as time;
+/// A view's title row. Its fixed height matches `button`, so headings,
+/// labels and buttons share one centre line instead of stepping down by
+/// widget height.
+pub(super) fn header_row(ui: &mut Ui, contents: impl FnOnce(&mut Ui)) {
+    let size = vec2(ui.available_width(), 36.);
+    ui.allocate_ui_with_layout(size, Layout::left_to_right(Align::Center), contents);
+}
+
 pub(super) fn button(ui: &mut Ui, label: &str, primary: bool) -> Response {
     let text = RichText::new(label).color(if primary { Color32::WHITE } else { TEXT });
     ui.add(
