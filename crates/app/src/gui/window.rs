@@ -491,6 +491,7 @@ impl Desktop {
         self.partner_removal_dialog(ctx);
         self.script_dialog(ctx);
         self.rule_dialog(ctx);
+        self.import_dialog(ctx);
         self.settings_dialog(ctx);
     }
 }

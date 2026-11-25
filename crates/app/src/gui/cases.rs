@@ -1,6 +1,151 @@
 use super::*;
+use crate::cases::{describe, preview};
 use egui::{ComboBox, RichText, ScrollArea, Ui};
-use vendredi_core::case::{self, Case};
+use vendredi_core::{
+    case::{self, Case},
+    import::{self, Change, Incoming},
+};
+
+type Preview = std::result::Result<(Vec<Incoming>, Vec<Change>), String>;
+
+/// The Import cases dialog. Fetching runs off the UI thread.
+pub(super) struct ImportForm {
+    source: String,
+    pending: Option<mpsc::Receiver<Preview>>,
+    preview: Option<Preview>,
+}
+
+impl Desktop {
+    fn start_preview(&mut self) {
+        let Some(form) = &mut self.import else {
+            return;
+        };
+        let (tx, rx) = mpsc::channel();
+        let root = self.root.clone();
+        let source = form.source.trim().to_owned();
+        let out = self.output.clone();
+        form.preview = None;
+        form.pending = Some(rx);
+        thread::spawn(move || {
+            let _ = tx.send(preview(&root, &source).map_err(|e| format!("{e:#}")));
+            out(json!({"event":"import_ready"}));
+        });
+    }
+
+    fn install(&mut self, incoming: &[Incoming]) -> Result<usize> {
+        let changes = import::apply(&self.root, incoming, true)?;
+        // Restart the engine so it loads the new cases.
+        self.apply_files(&[])?;
+        Ok(changes.iter().filter(|c| **c != Change::Unchanged).count())
+    }
+
+    pub(super) fn poll_import(&mut self) {
+        if let Some(form) = &mut self.import
+            && let Some(result) = form.pending.as_ref().and_then(|rx| rx.try_recv().ok())
+        {
+            form.pending = None;
+            form.preview = Some(result);
+        }
+    }
+
+    pub(super) fn import_dialog(&mut self, ctx: &egui::Context) {
+        self.poll_import();
+        let Some(form) = &mut self.import else {
+            return;
+        };
+        let mut close = false;
+        let mut start = false;
+        let mut install = None;
+        let escaped = form::modal(ctx, "import cases", "Import cases", 560., |ui| {
+            ui.label(muted(
+                "Enter a case folder, a case or catalog JSON file, or an https:// URL. Nothing is installed until you confirm.",
+            ));
+            let field = form::input(
+                ui,
+                "Folder, file or URL",
+                &mut form.source,
+                "https://example.com/cases/catalog.json",
+            );
+            if field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                start = true;
+            }
+            match &form.preview {
+                _ if form.pending.is_some() => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("Fetching and checking cases…");
+                    });
+                }
+                Some(Ok((incoming, changes))) => {
+                    ScrollArea::vertical().max_height(260.).show(ui, |ui| {
+                        for line in describe(incoming, changes) {
+                            ui.monospace(line);
+                        }
+                    });
+                    if changes.iter().any(|c| matches!(c, Change::Changed(_))) {
+                        ui.colored_label(
+                            AMBER,
+                            "Changed cases replace the installed copies, including any local edits.",
+                        );
+                    }
+                }
+                Some(Err(e)) => {
+                    ui.colored_label(AMBER, e);
+                }
+                None => {}
+            }
+            form::footer(ui, |ui| {
+                let ready = match &form.preview {
+                    Some(Ok((incoming, changes))) if form.pending.is_none() => {
+                        let count = changes.iter().filter(|c| **c != Change::Unchanged).count();
+                        Some((incoming, count))
+                    }
+                    _ => None,
+                };
+                match ready {
+                    Some((incoming, count)) if count > 0 => {
+                        let label =
+                            format!("Import {count} case{}", if count == 1 { "" } else { "s" });
+                        if button(ui, &label, true).clicked() {
+                            install = Some(incoming.clone());
+                        }
+                    }
+                    _ => {
+                        let can = !form.source.trim().is_empty() && form.pending.is_none();
+                        if ui.add_enabled(can, egui::Button::new("Preview")).clicked() {
+                            start = true;
+                        }
+                    }
+                }
+                if button(ui, "Cancel", false).clicked() {
+                    close = true;
+                }
+            });
+        });
+        if start {
+            self.start_preview();
+        }
+        if let Some(incoming) = install {
+            match self.install(&incoming) {
+                Ok(n) => {
+                    self.status = format!("Imported {n} case{}", if n == 1 { "" } else { "s" });
+                    if let [one] = incoming.as_slice() {
+                        self.case = one.bundle.case.id.clone();
+                    }
+                    close = true;
+                }
+                Err(e) => {
+                    if let Some(form) = &mut self.import {
+                        form.preview = Some(Err(format!("{e:#}")));
+                    }
+                }
+            }
+        }
+        if close || escaped {
+            self.import = None;
+        }
+    }
+}
 
 impl Desktop {
     /// Rereads the configuration after the engine switched a case and wrote
@@ -42,7 +187,17 @@ impl Desktop {
         ui.set_max_width(ui.available_width().min(980.));
         ui.horizontal(|ui| {
             ui.heading("Cases");
-            ui.add_space(12.);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if button(ui, "Import cases…", true).clicked() {
+                    self.import = Some(ImportForm {
+                        source: String::new(),
+                        pending: None,
+                        preview: None,
+                    });
+                }
+            });
+        });
+        ui.horizontal(|ui| {
             form::label(ui, "Partner");
             ComboBox::from_id_salt("case partner")
                 .selected_text(&self.workspace.partners[self.partner].name)
@@ -272,6 +427,48 @@ mod tests {
             a.workspace.partners[0].case_id() == case::DEFAULT
         })?;
         assert!(!fs::read_to_string(&file)?.contains("\ncase ="));
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "opens a local workspace listener"]
+    fn import_cases_after_previewing_changes() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        crate::sample(dir.path())?;
+        let file = dir.path().join("vendredi.toml");
+        fs::write(&file, fs::read_to_string(&file)?.replace(":8180", ":0"))?;
+        let edited = dir.path().join("edited.json");
+        let mut json: Value = serde_json::from_str(include_str!(
+            "../../../../examples/cases/reject-orders.json"
+        ))?;
+        json["name"] = "Reject all orders".into();
+        fs::write(&edited, serde_json::to_vec(&json)?)?;
+        let ctx = egui::Context::default();
+        let mut app = Desktop::open(dir.path().into(), &ctx)?;
+        click(&mut app, &ctx, "Cases")?;
+        click(&mut app, &ctx, "Import cases…")?;
+        app.import.as_mut().unwrap().source = edited.display().to_string();
+        click(&mut app, &ctx, "Preview")?;
+        wait_for(&mut app, "import preview", |a| {
+            a.import
+                .as_ref()
+                .is_some_and(|f| f.pending.is_none() && f.preview.is_some())
+        })?;
+        let Some(Ok((_, changes))) = &app.import.as_ref().unwrap().preview else {
+            panic!("expected a preview");
+        };
+        assert_eq!(changes, &[Change::Changed(vec!["case.json name".into()])]);
+        click(&mut app, &ctx, "Import 1 case")?;
+        assert!(app.import.is_none(), "{}", app.status);
+        assert_eq!(app.status, "Imported 1 case");
+        assert_eq!(app.case, "reject-orders");
+        let installed = app
+            .workspace
+            .cases
+            .iter()
+            .find(|c| c.id == "reject-orders")
+            .unwrap();
+        assert_eq!(installed.name, "Reject all orders");
         Ok(())
     }
 }

@@ -145,6 +145,7 @@ struct Desktop {
     partner: usize,
     /// The case selected in the Cases view.
     case: String,
+    import: Option<cases::ImportForm>,
     send_file: String,
     function: String,
     config_source: String,
@@ -213,6 +214,7 @@ impl Desktop {
             file_unavailable: false,
             partner: 0,
             case: String::new(),
+            import: None,
             send_file: String::new(),
             function: String::new(),
             edit_file,
@@ -287,6 +289,7 @@ impl Desktop {
                 }
                 "error" => self.status = v["error"].as_str().unwrap_or("Command failed").into(),
                 "case_switched" => self.case_switched(&v),
+                "import_ready" => self.poll_import(),
                 _ => {
                     refresh = true;
                     if let Some(error) = v["error"].as_str() {
