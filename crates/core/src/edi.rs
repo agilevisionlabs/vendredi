@@ -142,6 +142,21 @@ impl Message {
     pub fn kind(&self) -> &str {
         self.header().at(1, 0)
     }
+    /// EDIFACT directory version, such as `D`.
+    pub fn directory(&self) -> &str {
+        self.header().at(1, 1)
+    }
+    /// EDIFACT directory release, such as `96A`.
+    pub fn release(&self) -> &str {
+        self.header().at(1, 2)
+    }
+    /// The standard-neutral version that rules match, such as `D96A`.
+    pub fn version(&self) -> String {
+        format!("{}{}", self.directory(), self.release())
+    }
+    pub fn reference(&self) -> &str {
+        self.header().at(0, 0)
+    }
     fn validate(&self, findings: &mut Vec<Finding>) {
         let h = self.header();
         if h.at(0, 0).is_empty()

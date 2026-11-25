@@ -22,6 +22,8 @@ pub struct Workspace {
 #[serde(deny_unknown_fields)]
 pub struct Partner {
     pub name: String,
+    #[serde(default, skip_serializing_if = "Standard::is_default")]
+    pub standard: Standard,
     pub identity: Vec<String>,
     pub charset: String,
     pub acknowledge: Policy,
@@ -44,6 +46,23 @@ impl Partner {
         );
         syntax.validate()?;
         Ok(syntax)
+    }
+}
+/// The EDI standard a partner exchanges and a case is written for.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Standard {
+    #[default]
+    Edifact,
+}
+impl Standard {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Edifact => "EDIFACT",
+        }
     }
 }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
@@ -85,22 +104,35 @@ impl SendChannel {
 #[serde(deny_unknown_fields)]
 pub struct Rule {
     pub name: String,
+    /// EDIFACT message type or X12 transaction set, such as `ORDERS` or `850`.
     pub message: String,
+    /// EDIFACT directory version and release (`D96A`) or X12 `GS08` (`005010`).
+    /// A bare EDIFACT directory version such as `D` matches every release.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// Read from 0.1 workspaces, which split `D96A` into `version = "D"` and
+    /// `release = "96A"`. Editors write the combined `version` instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub release: Option<String>,
     pub actions: Vec<Action>,
 }
 impl Rule {
     pub fn matches(&self, m: &edi::Message) -> bool {
         self.message == m.kind()
-            && self
-                .version
-                .as_ref()
-                .is_none_or(|s| s == m.header().at(1, 1))
-            && self
-                .release
-                .as_ref()
-                .is_none_or(|s| s == m.header().at(1, 2))
+            && match (&self.version, &self.release) {
+                (None, None) => true,
+                (version, Some(release)) => {
+                    version.as_ref().is_none_or(|v| v == m.directory()) && release == m.release()
+                }
+                (Some(version), None) => *version == m.version() || version == m.directory(),
+            }
+    }
+    /// The version as editors show and write it, merging a legacy `release`.
+    pub fn combined_version(&self) -> Option<String> {
+        match (&self.version, &self.release) {
+            (v, Some(r)) => Some(format!("{}{r}", v.as_deref().unwrap_or_default())),
+            (v, None) => v.clone(),
+        }
     }
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -239,6 +271,38 @@ mod tests {
         let w = Workspace::load(dir.path())?;
         let p = edi::parse(include_bytes!("../../../examples/orders/order.edi"));
         assert!(w.partners[0].rules[0].matches(&p.interchanges[0].messages[0]));
+        assert_eq!(w.partners[0].standard, Standard::Edifact);
         Ok(())
+    }
+    #[test]
+    fn rule_versions_cover_combined_and_legacy_forms() {
+        let parsed = edi::parse(include_bytes!("../../../examples/orders/order.edi"));
+        let order = &parsed.interchanges[0].messages[0];
+        let rule = |version: Option<&str>, release: Option<&str>| Rule {
+            name: "r".into(),
+            message: "ORDERS".into(),
+            version: version.map(Into::into),
+            release: release.map(Into::into),
+            actions: vec![],
+        };
+        for (version, release, matches) in [
+            (None, None, true),
+            (Some("D96A"), None, true),
+            (Some("D"), None, true),
+            (Some("D01B"), None, false),
+            (Some("D"), Some("96A"), true),
+            (None, Some("96A"), true),
+            (Some("D"), Some("01B"), false),
+        ] {
+            assert_eq!(
+                rule(version, release).matches(order),
+                matches,
+                "{version:?} {release:?}"
+            );
+        }
+        assert_eq!(
+            rule(Some("D"), Some("96A")).combined_version().as_deref(),
+            Some("D96A")
+        );
     }
 }

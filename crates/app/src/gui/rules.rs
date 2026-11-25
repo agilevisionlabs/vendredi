@@ -45,13 +45,16 @@ pub(super) struct RuleForm {
 impl RuleForm {
     fn new(workspace: &Workspace, partner: usize, index: Option<usize>) -> Self {
         let rules = &workspace.partners[partner].rules;
-        let rule = index.map(|i| rules[i].clone()).unwrap_or_else(|| Rule {
+        let mut rule = index.map(|i| rules[i].clone()).unwrap_or_else(|| Rule {
             name: String::new(),
             message: String::new(),
             version: None,
             release: None,
             actions: vec![],
         });
+        // Editors show and save one version, such as D96A, for every standard.
+        rule.version = rule.combined_version();
+        rule.release = None;
         Self {
             partner,
             index,
@@ -76,7 +79,7 @@ impl RuleForm {
             ensure!(!rule.name.trim().is_empty(), "Enter a rule name.");
             ensure!(
                 !rule.message.trim().is_empty(),
-                "Enter the EDIFACT message type."
+                "Enter the message type or transaction set."
             );
             for action in &rule.actions {
                 if let Action::Script {
@@ -147,21 +150,17 @@ impl RuleForm {
             }
         }
         form::field(ui, "Rule name", &mut self.rule.name);
-        ui.columns(3, |cols| {
+        ui.columns(2, |cols| {
             form::input(
                 &mut cols[0],
                 "Message type",
                 &mut self.rule.message,
-                "ORDERS",
+                "ORDERS or 850",
             );
-            for (col, title, field) in [
-                (1, "Version", &mut self.rule.version),
-                (2, "Release", &mut self.rule.release),
-            ] {
-                let mut s = field.clone().unwrap_or_default();
-                if form::input(&mut cols[col], title, &mut s, "Any").changed() {
-                    *field = (!s.is_empty()).then_some(s);
-                }
+            let mut s = self.rule.version.clone().unwrap_or_default();
+            if form::input(&mut cols[1], "Version", &mut s, "Any, D96A or 005010").changed() {
+                let s = s.trim();
+                self.rule.version = (!s.is_empty()).then(|| s.to_owned());
             }
         });
         ui.horizontal(|ui| {
@@ -334,7 +333,7 @@ impl Desktop {
                         rule_row(ui, 24., |col, ui| {
                             form::label(
                                 ui,
-                                ["Order", "Rule", "Message", "Directory", "Actions"][col],
+                                ["Order", "Rule", "Message", "Version", "Actions"][col],
                             );
                         });
                         ui.separator();
@@ -353,15 +352,9 @@ impl Desktop {
                                     ui.monospace(&rule.message).on_hover_text(&rule.message);
                                 }
                                 3 => {
-                                    let directory = match (&rule.version, &rule.release) {
-                                        (None, None) => "Any".into(),
-                                        (v, r) => format!(
-                                            "{}.{}",
-                                            v.as_deref().unwrap_or("*"),
-                                            r.as_deref().unwrap_or("*")
-                                        ),
-                                    };
-                                    ui.label(muted(&directory)).on_hover_text(directory);
+                                    let version =
+                                        rule.combined_version().unwrap_or_else(|| "Any".into());
+                                    ui.label(muted(&version)).on_hover_text(version);
                                 }
                                 _ => {
                                     ui.label(rule.actions.len().to_string());
@@ -492,12 +485,36 @@ actions=[{delay_ms=25}]
         assert_eq!(w.partners[0].rules[1].name, "Confirm orders");
         assert_eq!(w.partners[1].rules[0].name, "Freight updates");
         app.edit_rule_link("Supplier", "Audit orders");
-        app.rule_form.as_mut().unwrap().rule.release = Some("96A".into());
+        app.rule_form.as_mut().unwrap().rule.version = Some("D96A".into());
         click(&mut app, &ctx, "Save rule")?;
         assert_eq!(
-            app.workspace.partners[0].rules[0].release.as_deref(),
-            Some("96A")
+            app.workspace.partners[0].rules[0].version.as_deref(),
+            Some("D96A")
         );
+        // A 0.1 rule with a separate release is rewritten in the combined form.
+        let legacy = app.config_source.replacen(
+            "version = \"D96A\"",
+            "version = \"D\"\nrelease = \"96A\"",
+            2,
+        );
+        assert_eq!(legacy.matches("release").count(), 2);
+        app.save_configuration(legacy, None)?;
+        app.edit_rule_link("Supplier", "Confirm orders");
+        assert_eq!(
+            app.rule_form.as_ref().unwrap().rule.version.as_deref(),
+            Some("D96A")
+        );
+        app.rule_form.as_mut().unwrap().rule.name = "Confirm all orders".into();
+        click(&mut app, &ctx, "Save rule")?;
+        let w = Workspace::load(dir.path())?;
+        let edited = &w.partners[0].rules[1];
+        assert_eq!(edited.name, "Confirm all orders");
+        assert_eq!(
+            (edited.version.as_deref(), edited.release.as_deref()),
+            (Some("D96A"), None)
+        );
+        // Rules the editor did not save keep their original spelling.
+        assert_eq!(w.partners[0].rules[0].release.as_deref(), Some("96A"));
         click(&mut app, &ctx, "Audit orders")?;
         click(&mut app, &ctx, "Remove rule")?;
         click(&mut app, &ctx, "Confirm removal")?;

@@ -13,6 +13,5 @@ send = { url = "http://127.0.0.1:8181/replies" }
 [[partners.rules]]
 name = "Confirm orders"
 message = "ORDERS"
-version = "D"
-release = "96A"
+version = "D96A"
 actions = [{ document = "confirmation.edi" }]

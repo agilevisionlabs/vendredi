@@ -20,6 +20,7 @@ impl PartnerForm {
             .map(|i| workspace.partners[i].clone())
             .unwrap_or_else(|| Partner {
                 name: String::new(),
+                standard: Default::default(),
                 identity: vec![String::new(), "ZZ".into()],
                 charset: "UNOC".into(),
                 acknowledge: Policy::Always,
