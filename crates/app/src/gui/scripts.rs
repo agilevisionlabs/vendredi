@@ -45,7 +45,7 @@ impl ScriptForm {
     }
 
     fn load(&mut self, root: &Path) -> Result<()> {
-        let text = fs::read_to_string(root.join(&self.file))
+        let text = vendredi_core::script::read_source(root.join(&self.file))
             .with_context(|| format!("Opening {}", self.file))?;
         self.source.clone_from(&text);
         self.original = Some(text);

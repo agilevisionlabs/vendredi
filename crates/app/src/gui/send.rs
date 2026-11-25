@@ -33,12 +33,14 @@ impl Desktop {
     fn send_selected(&mut self) -> Result<()> {
         let path = PathBuf::from(self.send_file.trim());
         let absolute = self.root.join(&path);
-        let bytes =
-            fs::read(&absolute).with_context(|| format!("Opening {}", absolute.display()))?;
         let function = self.send_script.then(|| self.function.trim().to_owned());
         if let Some(f) = &function {
-            script::validate(std::str::from_utf8(&bytes)?, f)?;
+            let source = script::read_source(&absolute)
+                .with_context(|| format!("Opening {}", absolute.display()))?;
+            script::validate(&source, f)?;
         } else {
+            let bytes =
+                fs::read(&absolute).with_context(|| format!("Opening {}", absolute.display()))?;
             edi::document(&bytes)?;
         }
         self.running

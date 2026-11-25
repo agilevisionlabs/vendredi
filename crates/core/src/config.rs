@@ -196,7 +196,7 @@ impl Workspace {
                                 )?;
                             }
                             Action::Script { script, .. } => {
-                                fs::read_to_string(self.root.join(script))
+                                crate::script::read_source(self.root.join(script))
                                     .with_context(|| script.display().to_string())?;
                             }
                             _ => {}

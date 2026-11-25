@@ -25,7 +25,14 @@ pub(super) struct FileEdit<'a> {
 }
 impl FileEdit<'_> {
     fn verify(&self) -> Result<()> {
-        match fs::read(self.path) {
+        use std::io::Read;
+        // Only the original length plus one byte is needed to detect an edit.
+        let expected = self.before.unwrap_or_default().len();
+        match fs::File::open(self.path).and_then(|file| {
+            let mut bytes = Vec::new();
+            file.take(expected as u64 + 1).read_to_end(&mut bytes)?;
+            Ok(bytes)
+        }) {
             Ok(text) => ensure!(
                 Some(text.as_slice()) == self.before,
                 "{} changed on disk. Reopen the workspace before saving.",

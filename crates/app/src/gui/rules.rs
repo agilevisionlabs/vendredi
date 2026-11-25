@@ -84,7 +84,7 @@ impl RuleForm {
                     function,
                 } = action
                 {
-                    let src = fs::read_to_string(app.root.join(path))
+                    let src = vendredi_core::script::read_source(app.root.join(path))
                         .with_context(|| format!("Opening {}", path.display()))?;
                     vendredi_core::script::validate(&src, function)?;
                 }

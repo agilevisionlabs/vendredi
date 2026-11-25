@@ -721,12 +721,11 @@ impl Engine {
                 )?;
                 let reference = rows[0].get::<i64>(0)?;
                 let state: BTreeMap<_, _> = serde_json::from_str(&rows[0].get::<String>(1)?)?;
-                let inbound = serde_json::to_value(t.inbound.as_deref())?;
                 let effects = script::run(
-                    &fs::read_to_string(self.workspace.root.join(path))?,
+                    &script::read_source(self.workspace.root.join(path))?,
                     function,
                     &script::Input {
-                        interchange: &inbound,
+                        interchange: &t.inbound.as_deref(),
                         state: &state,
                         reference,
                         now: self.clock.millis(),
@@ -1123,6 +1122,12 @@ mod tests {
         assert_eq!(
             edi::parse(&delayed.bytes).interchanges[0].messages[0].kind(),
             "ORDRSP"
+        );
+        assert_eq!(delayed.bytes, b"UNB+UNOC:3+SUPPLIER:ZZ+BUYER:ZZ+700101:0000+2'UNH+1+ORDRSP:D:96A:UN'BGM+231'UNT+3+1'UNZ+1+2'");
+        assert!(
+            e.take_events()
+                .iter()
+                .any(|event| event["event"] == "script_log" && event["text"] == "1020")
         );
         e.finish_delivery(delayed.id, Err("offline".into()))?;
         e.resend(delayed.id)?;
