@@ -33,7 +33,9 @@ jobs:
       - run: rustup target add --toolchain stable wasm32-wasip1
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libclang-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev libx11-dev
-      - run: cargo +stable test --workspace --locked -- --include-ignored
+      - run: cargo +stable test --workspace --locked
+      - name: Exercise local GUI and listener workflows
+        run: cargo +stable test --workspace --locked -- --ignored --test-threads=1
       - run: cargo +stable build --release --locked
       - name: Install a software OpenGL driver for the Windows runner
         if: runner.os == 'Windows'

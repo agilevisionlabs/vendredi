@@ -449,8 +449,7 @@ impl Desktop {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gui::tests::click;
-    use std::time::{Duration, Instant};
+    use crate::gui::tests::{click, wait_for};
 
     #[test]
     #[ignore = "uses a local listener and folder watcher"]
@@ -489,23 +488,13 @@ mod tests {
             dir.path().join("order.edi"),
             dir.path().join("inbox/order.edi"),
         )?;
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            app.drain();
-            if app.detail["events"].as_array().is_some_and(|events| {
+        wait_for(&mut app, "folder script log", |app| {
+            app.detail["events"].as_array().is_some_and(|events| {
                 events
                     .iter()
-                    .any(|e| e["event"] == "script_log" && e.to_string().contains("order arrived"))
-            }) {
-                break;
-            }
-            ensure!(
-                Instant::now() < deadline,
-                "script did not log for folder intake: {}",
-                app.detail
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
+                    .any(|e| e["event"] == "script_log" && e["text"] == "order arrived")
+            })
+        })?;
 
         click(&mut app, &ctx, "scripts/orders.js")?;
         let f = app.script_form.as_mut().unwrap();

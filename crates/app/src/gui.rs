@@ -529,6 +529,27 @@ mod tests {
             draw,
         )
     }
+    pub(super) fn wait_for(
+        app: &mut Desktop,
+        operation: &str,
+        ready: impl Fn(&Desktop) -> bool,
+    ) -> Result<()> {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            app.drain();
+            if ready(app) {
+                return Ok(());
+            }
+            ensure!(
+                Instant::now() < deadline,
+                "timed out waiting for {operation} (status {}, selected {:?}, detail {})",
+                app.status,
+                app.selected,
+                app.detail
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
     pub(super) fn click(app: &mut Desktop, ctx: &egui::Context, label: &str) -> Result<()> {
         click_in(ctx, label, |ctx| app.show(ctx))
     }
@@ -919,10 +940,9 @@ send = { directory = "freight-out" }
             thread::sleep(Duration::from_millis(10));
         }
         click(&mut app, &ctx, "ORDRSP")?;
-        while !text_matches_reply(&app.detail) {
-            ensure!(Instant::now() < deadline, "inspect timed out");
-            app.drain();
-        }
+        wait_for(&mut app, "reply inspection", |app| {
+            text_matches_reply(&app.detail)
+        })?;
         assert!(app.detail["raw"].as_str().unwrap().contains("ORDRSP"));
         let segment_text = app.detail["segments"][2]["raw"]
             .as_str()
@@ -940,20 +960,13 @@ send = { directory = "freight-out" }
         click(&mut app, &ctx, "In")?;
         assert_eq!(app.transfers.values().filter(|r| app.visible(r)).count(), 1);
         click(&mut app, &ctx, "Replay")?;
-        while app.transfers.values().filter(|r| !r.outgoing).count() != 2 {
-            ensure!(Instant::now() < deadline, "replay timed out");
-            app.drain();
-        }
+        wait_for(&mut app, "replay", |app| {
+            app.transfers.values().filter(|r| !r.outgoing).count() == 2
+        })?;
         click(&mut app, &ctx, "▪  Stop")?;
-        while app.listening {
-            ensure!(Instant::now() < deadline, "stop timed out");
-            app.drain();
-        }
+        wait_for(&mut app, "listener stop", |app| !app.listening)?;
         click(&mut app, &ctx, "▷  Start")?;
-        while !app.listening {
-            ensure!(Instant::now() < deadline, "restart timed out");
-            app.drain();
-        }
+        wait_for(&mut app, "listener restart", |app| app.listening)?;
         click(&mut app, &ctx, "Settings")?;
         click(&mut app, &ctx, "Edit configuration file")?;
         // Drive the multiline editor with the same keyboard events as Select All and paste.
