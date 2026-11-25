@@ -10,9 +10,9 @@ import signal
 import socket
 import sqlite3
 import subprocess
-import tarfile
 import tempfile
 import time
+import zipfile
 
 
 def usage(pid):
@@ -134,10 +134,11 @@ if __name__ == "__main__":
         helper = root / "window"
         subprocess.run(["swiftc", Path(__file__).with_name("macos_window.swift"), "-o", helper], check=True)
         binary = args.release.resolve()
-        if binary.name.endswith(".tar.gz"):
-            with tarfile.open(binary) as archive:
-                assert all(name.split("/")[0] == "Vendredi.app" for name in archive.getnames())
-                archive.extractall(root, filter="data")
+        if binary.suffix == ".zip":
+            with zipfile.ZipFile(binary) as archive:
+                assert all(name.split("/")[0] == "Vendredi.app" for name in archive.namelist())
+            # ditto restores the executable bit, which zipfile's extraction drops.
+            subprocess.run(["ditto", "-x", "-k", binary, root], check=True)
             app = root / "Vendredi.app"
             subprocess.run(["codesign", "--verify", "--strict", app], check=True)
             contents = app / "Contents"

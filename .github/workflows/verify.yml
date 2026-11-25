@@ -27,6 +27,8 @@ jobs:
             artifact: linux-arm64
             binary: vendredi
     runs-on: ${{ matrix.os }}
+    # Only tagged Mac builds enter the environment that holds the signing secrets.
+    environment: ${{ startsWith(github.ref, 'refs/tags/v') && startsWith(matrix.os, 'macos') && 'release' || '' }}
     steps:
       - uses: actions/checkout@v7.0.1
       - run: rustup update stable
@@ -57,16 +59,61 @@ jobs:
           Copy-Item target/release/vendredi.exe $smoke
           Copy-Item (Join-Path $mesa 'opengl32.dll') $smoke
           ./tests/release_windows.ps1 (Join-Path $smoke 'vendredi.exe')
+      - name: Load the Developer ID certificate and notary key for a tagged release
+        if: runner.os == 'macOS' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+        run: |
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password=$(uuidgen)
+          printenv CERTIFICATE | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          printenv NOTARY_KEY > "$RUNNER_TEMP/notary.p8"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -P "$CERTIFICATE_PASSWORD" -t cert -f pkcs12 -k "$keychain" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -k "$password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain"
+          identity=$(security find-identity -v -p codesigning "$keychain" | awk -F'"' '/Developer ID Application: .*\(848W9BP9CL\)/ { print $2; exit }')
+          test -n "$identity"
+          echo "MACOS_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "MACOS_NOTARY_KEY=$RUNNER_TEMP/notary.p8" >> "$GITHUB_ENV"
       - run: python scripts/package_release.py target/release/${{ matrix.binary }} ${{ matrix.artifact }}
-      - run: python tests/local_instance.py --archive target/dist/vendredi-${{ matrix.artifact }}.${{ runner.os == 'Windows' && 'zip' || 'tar.gz' }}
+        env:
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER: ${{ secrets.MACOS_NOTARY_ISSUER }}
+      - run: python tests/local_instance.py --archive target/dist/vendredi-${{ matrix.artifact }}.${{ runner.os == 'Linux' && 'tar.gz' || 'zip' }}
       - run: python -m pip install --target "${{ runner.temp }}/profile-deps" psutil==7.2.2
       - run: python tests/script_profile.py target/release/${{ matrix.binary }}
         env:
           PYTHONPATH: ${{ runner.temp }}/profile-deps
       - if: runner.os == 'macOS'
-        run: python3 tests/release_macos.py target/dist/vendredi-${{ matrix.artifact }}.tar.gz
+        run: python3 tests/release_macos.py target/dist/vendredi-${{ matrix.artifact }}.zip
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: vendredi-${{ matrix.artifact }}
           path: target/dist/vendredi-${{ matrix.artifact }}.*
           if-no-files-found: error
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: native
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish the tested archives as a GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(cargo metadata --no-deps --locked --format-version=1 | jq -r '.packages[] | select(.name == "vendredi").version')
+          test "$TAG" = "v$version"
+          (cd dist && sha256sum vendredi-* > SHA256SUMS)
+          gh release create "$TAG" dist/* --verify-tag --title "Vendredi $version" --notes-file "docs/releases/$TAG.md"

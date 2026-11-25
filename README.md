@@ -62,6 +62,22 @@ python3 tests/local_instance.py --binary target/release/vendredi
 
 The last two commands bind loopback listeners and use temporary workspaces. On Windows pass `target/release/vendredi.exe`. See the [implementation milestones](IMPLEMENTATION.md) and [runtime architecture](ARCHITECTURE.md).
 
+## Release
+
+Set the workspace version in `Cargo.toml`, write the notes in `docs/releases/vX.Y.Z.md`, then push the tag `vX.Y.Z`. The tag build signs both Mac apps with the Developer ID certificate, has Apple notarize them and staples the ticket. It then runs the same archive tests as every other build and publishes the five archives with `SHA256SUMS` as a GitHub release. Other builds sign the Mac apps ad hoc.
+
+The tagged Mac builds run in the `release` environment, which is restricted to `v*` tags, and read these secrets from it:
+
+| Secret | Value |
+| --- | --- |
+| `MACOS_CERTIFICATE_P12` | Developer ID Application certificate and private key, exported as `.p12` and base64-encoded |
+| `MACOS_CERTIFICATE_PASSWORD` | Password of that `.p12` |
+| `MACOS_NOTARY_KEY` | Contents of the App Store Connect API key (`.p8`) |
+| `MACOS_NOTARY_KEY_ID` | ID of that key |
+| `MACOS_NOTARY_ISSUER` | Issuer ID of the App Store Connect team |
+
+To build the same notarized ZIP on a Mac, run `scripts/package_release.py` with `MACOS_SIGNING_IDENTITY` set to the certificate name and `MACOS_NOTARY_PROFILE` set to a profile saved with `xcrun notarytool store-credentials`.
+
 ## Goals
 
 - **Dev tool.** Used by developers building and testing EDI integrations locally. It never carries real partner traffic.

@@ -307,14 +307,14 @@ if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as tmp:
         if args.archive:
             if args.archive.suffix == ".zip":
-                BINARY = Path(tmp) / "vendredi.exe"
                 with zipfile.ZipFile(args.archive) as package:
-                    BINARY.write_bytes(package.read(BINARY.name))
+                    names = {"vendredi.exe", "Vendredi.app/Contents/MacOS/vendredi"}
+                    member, = names.intersection(package.namelist())
+                    BINARY = Path(tmp) / Path(member).name
+                    BINARY.write_bytes(package.read(member))
             else:
                 BINARY = Path(tmp) / "vendredi"
                 with tarfile.open(args.archive) as package:
-                    names = {"vendredi", "Vendredi.app/Contents/MacOS/vendredi"}
-                    member, = [m for m in package.getmembers() if m.isfile() and m.name in names]
-                    BINARY.write_bytes(package.extractfile(member).read())
-                BINARY.chmod(0o755)
+                    BINARY.write_bytes(package.extractfile("vendredi").read())
+            BINARY.chmod(0o755)
         unittest.main(argv=["local_instance"], verbosity=2)

@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import plistlib
 import shutil
@@ -37,20 +38,47 @@ def package_macos(binary, path):
             "CFBundleVersion": version,
             "NSHighResolutionCapable": True,
         }))
-        subprocess.run(["codesign", "--force", "--sign", "-", "--timestamp=none", app], check=True)
-        subprocess.run(["codesign", "--verify", "--strict", app], check=True)
-        with tarfile.open(path, "w:gz") as archive:
-            archive.add(app, arcname=app.name)
-        with tarfile.open(path) as archive:
-            member = archive.getmember(str(executable.relative_to(tmp)))
-            assert member.isfile() and member.mode & 0o111
-            assert archive.extractfile(member).read() == executable.read_bytes()
+        # A Developer ID identity produces the public release: signed, notarized and stapled.
+        # Without one the bundle is ad-hoc signed, with the same hardened runtime, for testing.
+        identity = os.environ.get("MACOS_SIGNING_IDENTITY")
+        signer = ["--sign", identity, "--timestamp"] if identity else ["--sign", "-", "--timestamp=none"]
+        subprocess.run(["codesign", "--force", "--options", "runtime", *signer, app], check=True)
+        archive = ["ditto", "-c", "-k", "--keepParent", "--norsrc", "--noextattr", app, path]
+        subprocess.run(archive, check=True)
+        if identity:
+            # CI passes the App Store Connect key itself; a developer's Mac names a
+            # profile saved with `xcrun notarytool store-credentials`.
+            if profile := os.environ.get("MACOS_NOTARY_PROFILE"):
+                credentials = ["--keychain-profile", profile]
+            else:
+                credentials = [
+                    "--key", os.environ["MACOS_NOTARY_KEY"],
+                    "--key-id", os.environ["MACOS_NOTARY_KEY_ID"],
+                    "--issuer", os.environ["MACOS_NOTARY_ISSUER"],
+                ]
+            result = json.loads(subprocess.check_output([
+                "xcrun", "notarytool", "submit", path, "--wait", "--output-format", "json", *credentials,
+            ]))
+            assert result["status"] == "Accepted", result
+            subprocess.run(["xcrun", "stapler", "staple", app], check=True)
+            path.unlink()
+            subprocess.run(archive, check=True)
+        # Check the app a user gets by extracting the finished archive.
+        extracted = Path(tmp) / "extracted"
+        subprocess.run(["ditto", "-x", "-k", path, extracted], check=True)
+        shipped = extracted / app.name
+        subprocess.run(["codesign", "--verify", "--strict", shipped], check=True)
+        assert (shipped / executable.relative_to(app)).read_bytes() == executable.read_bytes()
+        if identity:
+            subprocess.run(["xcrun", "stapler", "validate", shipped], check=True)
+            subprocess.run(["spctl", "--assess", "--type", "execute", shipped], check=True)
 
 
 def package(binary, platform, output):
     output.mkdir(parents=True, exist_ok=True)
     if platform.startswith("macos-"):
-        path = output / f"vendredi-{platform}.tar.gz"
+        path = output / f"vendredi-{platform}.zip"
+        path.unlink(missing_ok=True)
         package_macos(binary, path)
     elif binary.suffix == ".exe":
         path = output / f"vendredi-{platform}.zip"
