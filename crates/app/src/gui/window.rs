@@ -157,6 +157,7 @@ impl Desktop {
                     section(ui, "  WORKSPACE");
                     ui.add_space(6.);
                     for (name, view) in [
+                        ("Cases", View::Cases),
                         ("Rules", View::Rules),
                         ("Scripts", View::Scripts),
                         ("Documents", View::Documents),
@@ -186,6 +187,10 @@ impl Desktop {
                 }
                 if self.view == View::Rules {
                     Frame::new().inner_margin(16).show(ui, |ui| self.rules(ui));
+                    return;
+                }
+                if self.view == View::Cases {
+                    Frame::new().inner_margin(16).show(ui, |ui| self.cases(ui));
                     return;
                 }
                 if self.view == View::Scripts {

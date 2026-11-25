@@ -1,3 +1,4 @@
+mod cases;
 mod form;
 mod history;
 mod inspector;
@@ -91,6 +92,7 @@ enum View {
     All,
     Attention,
     Partner(usize),
+    Cases,
     Rules,
     Scripts,
     Documents,
@@ -141,6 +143,8 @@ struct Desktop {
     file_error: Option<String>,
     file_unavailable: bool,
     partner: usize,
+    /// The case selected in the Cases view.
+    case: String,
     send_file: String,
     function: String,
     config_source: String,
@@ -208,6 +212,7 @@ impl Desktop {
             file_error: None,
             file_unavailable: false,
             partner: 0,
+            case: String::new(),
             send_file: String::new(),
             function: String::new(),
             edit_file,
@@ -281,6 +286,7 @@ impl Desktop {
                     }
                 }
                 "error" => self.status = v["error"].as_str().unwrap_or("Command failed").into(),
+                "case_switched" => self.case_switched(&v),
                 _ => {
                     refresh = true;
                     if let Some(error) = v["error"].as_str() {

@@ -24,6 +24,7 @@ fn transport(v: &Value) -> String {
 enum Link {
     Transfer(i64, String),
     Rule(String),
+    Case(String),
     Script(PathBuf, Option<String>),
 }
 struct Step {
@@ -60,6 +61,20 @@ impl Desktop {
                     text(v, "name").trim_start_matches("command: ").to_owned(),
                     "Partner command".into(),
                 ),
+                "execution" if text(v, "name").starts_with("initiate:") => {
+                    link = Some(Link::Case(text(v, "case").into()));
+                    (
+                        text(v, "name").trim_start_matches("initiate: ").to_owned(),
+                        "Partner-initiated send".into(),
+                    )
+                }
+                "execution" if !matches!(text(v, "case"), "" | "default") => {
+                    link = Some(Link::Case(text(v, "case").into()));
+                    (
+                        "Rule matched".into(),
+                        format!("{} in case", text(v, "name")),
+                    )
+                }
                 "execution" => {
                     link = Some(Link::Rule(text(v, "name").into()));
                     ("Rule matched".into(), String::new())
@@ -242,7 +257,9 @@ impl Desktop {
                             }
                             if let Some(link) = &step.link {
                                 let label = match link {
-                                    Link::Transfer(_, s) | Link::Rule(s) => s.clone(),
+                                    Link::Transfer(_, s) | Link::Rule(s) | Link::Case(s) => {
+                                        s.clone()
+                                    }
                                     Link::Script(p, _) => p.display().to_string(),
                                 };
                                 if ui
@@ -270,6 +287,7 @@ impl Desktop {
                                             self.select(*id);
                                         }
                                         Link::Rule(name) => self.edit_rule_link(&row.partner, name),
+                                        Link::Case(id) => self.show_case(id),
                                         Link::Script(p, rule) => {
                                             self.edit_script_link(p, &row.partner, rule.as_deref());
                                         }
