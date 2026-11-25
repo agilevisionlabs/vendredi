@@ -1,6 +1,6 @@
 # Vendredi
 
-An EDI simulator for developers: a fake trading partner that runs on your machine, receives the EDIFACT documents your integration sends, and replies with acknowledgements and response documents.
+An EDI simulator for developers: a fake trading partner that runs on your machine, receives the EDIFACT or X12 documents your integration sends, and replies with acknowledgements and response documents.
 
 ## Run an exchange
 
@@ -29,7 +29,7 @@ The listener returns HTTP 202 after recording the inbound bytes. Replies use the
 - Open **Scripts → Add script** to choose a partner and an existing or new rule. Enter a JavaScript filename and function, edit the source, and choose **Save script**. Click a script in the list to edit it or detach it from its rule. Detaching keeps the source file.
 - Open **Rules** to edit a rule’s message match, priority, and ordered actions. Clicking a matched rule in the traffic timeline opens the same editor.
 - **Settings → Edit settings** controls the listener address, workspace identity, and traffic retention. **Edit configuration file** opens the full TOML.
-- Each partner has ordered rules, one or more receive channels and one send channel. The first matching rule runs. The sample supports UN/EDIFACT syntax version 3, independent of the message directory release.
+- Each partner has ordered rules, one or more receive channels and one send channel. The first matching rule runs. Vendredi supports UN/EDIFACT syntax version 3, independent of the message directory release, and ANSI X12 interchanges (see [X12 partners](#x12-partners)).
 - To submit a file through a folder channel, write it under a temporary name in the same directory, close it, and rename it to the configured suffix (e.g. `.edi`). The suffix signals that the file is complete. Vendredi claims and removes it after recording. Each outgoing file is published under its transfer ID.
 - Choose **Traffic → Clear history…** to permanently remove exchanges from the last minute, hour, day, or week. Select all partners or a single partner, including one already removed. The last transfer determines the age of each exchange. Cleanup skips pending deliveries and scheduled actions and preserves partner state and reference counters.
 - A running headless instance accepts `send Supplier confirmation.edi`, `send Supplier script.js functionName`, `inspect 1`, `resend 2`, `case Supplier reject-orders`, `sample Supplier Order`, `initiate Supplier Invoice` and `quit` on standard input. Use a JSON array of strings for arguments containing spaces. With the workspace closed, run `vendredi send ./demo Supplier confirmation.edi`, `vendredi inspect ./demo 1` or `vendredi resend ./demo 2`. One engine owns the workspace at a time.
@@ -96,7 +96,7 @@ A case is a folder under `cases/` with a `case.json` and the files it references
 }
 ```
 
-Rules and actions use the same fields as `vendredi.toml`. Conditions belong in JavaScript, and the format has no expression language. `acknowledge` optionally overrides the partner's policy. Documents, samples and expected replies are single `UNH`…`UNT` messages with the default separators. The engine wraps a sample in an interchange from the workspace identity to the partner. `initiate` lists named action lists that the partner starts on its own, such as sending an invoice. File paths must stay inside the case.
+Rules and actions use the same fields as `vendredi.toml`. Conditions belong in JavaScript, and the format has no expression language. `acknowledge` optionally overrides the partner's policy. Documents, samples and expected replies are single `UNH`…`UNT` messages, or `ST`…`SE` transaction sets for X12, with the default separators. The engine wraps a sample in an interchange from the workspace identity to the partner. `initiate` lists named action lists that the partner starts on its own, such as sending an invoice. File paths must stay inside the case.
 
 A catalog lists cases by relative path, as folders or single JSON files:
 
@@ -114,7 +114,35 @@ vendredi case test ../edi-cases
 
 `case import` accepts a case folder, a case or catalog JSON file, a folder with `catalog.json`, or an `https://` URL. It fetches and checks every case before writing anything: file references, documents and script syntax. Imported scripts are only parsed, and run later in the sandbox when a rule fires. Unchanged cases are skipped. A case already installed with different content is listed with its differences, and replaced only with `--replace` or after confirming in the desktop's **Import cases…** dialog. Each installed case records its source, the SHA-256 of its JSON and the import time in `.vendredi-source.json`. HTTPS imports trust the bundled web roots and the system's certificates, refuse redirects to other schemes, and limit each file to 1 MiB.
 
-`case test` runs every `expect` entry in a temporary workspace with the workspace identity `BUYER:ZZ`, the partner `PARTNER:ZZ`, a clock starting at 2026-01-01T00:00Z and fresh references, so the first sample's interchange reference is `S1`. Scheduled delays complete immediately. It compares each sent message with the expected documents, prints the first differing byte of a mismatch, and fails if any check fails. A case repository can run it in CI.
+`case test` runs every `expect` entry in a temporary workspace with the workspace identity `BUYER:ZZ`, the partner `PARTNER:ZZ`, a clock starting at 2026-01-01T00:00Z and fresh references, so the first sample's interchange reference is `S1` (X12 control number `1`). X12 checks use the `GS08` version of the case's rules, or `005010`. Scheduled delays complete immediately. It compares each sent message with the expected documents, prints the first differing byte of a mismatch, and fails if any check fails. A case repository can run it in CI.
+
+## X12 partners
+
+A partner with `standard = "x12"` exchanges ANSI X12 interchanges. Its `identity` is the `ISA` sender ID and qualifier, and the workspace `identity` fills the other side. [`examples/x12`](examples/x12) is a complete workspace whose partner confirms each 850 with an 855.
+
+```toml
+[[partners]]
+name = "Supplier"
+standard = "x12"
+identity = ["SUPPLIER", "ZZ"]
+acknowledge = "always"
+receive = [{ path = "/supplier/850" }]
+send = { directory = "replies" }
+x12 = { version = "005010", acknowledgement = "997", ta1 = false, usage = "T" }
+
+[[partners.rules]]
+name = "Confirm purchase orders"
+message = "850"
+version = "005010"
+actions = [{ document = "855.edi" }]
+```
+
+- `x12.version` is the `GS08` value for documents and replies, and `ISA12` follows from it. `acknowledgement` is `997` or `999`, sent once per functional group. `ta1 = true` also sends a `TA1`. `usage` sets `ISA15`. `application` and `workspace_application` set the `GS02`/`GS03` codes, which default to the identities. `delimiters` sets the element, repetition, component and segment characters, such as `*^:~`. Use `U` for no repetition separator before version 00402.
+- Delimiters are read from each inbound `ISA`. Vendredi reports wrong `ISA` widths, `SE`, `GE` and `IEA` counts and mismatched control numbers with their byte offsets. A count or control problem inside one transaction set rejects only that set in the group acknowledgement, and the other sets still reach the rules. Envelope problems and the `reject` fault reject the interchange.
+- Documents and expected replies are one `ST`…`SE` transaction set with the default delimiters. The engine writes `ISA`, `GS`, `GE`, `IEA`, the `ST02`/`SE` control numbers and counts. Each reply is one interchange with one group, and its `GS06` equals its `ISA13`.
+- Faults behave as for EDIFACT. `reject` sends rejecting 997/999 and TA1 acknowledgements. `wrong_count` miscounts `GE01` and `IEA01`. `duplicate_reference` reuses `ISA13`.
+- Incoming 997, 999 and TA1 acknowledgements mark the matching outbound interchange as acknowledged, rejected or partially accepted.
+- Scripts receive the same interchange shape as EDIFACT. Groups add `functional` (`GS01`), `sender`, `recipient`, `reference` (`GS06`) and `version` (`GS08`). Messages add `implementation` (`ST03`) when present. A repeated element is `{"repeat": [...]}`. Build replies with `api.build("855", "005010", segments)`. An optional fourth argument can set `implementation`. Values cannot contain a delimiter, because X12 has no release character.
 
 ## Build and test
 
