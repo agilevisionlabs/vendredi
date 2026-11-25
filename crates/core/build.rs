@@ -34,6 +34,18 @@ fn main() {
         status.success(),
         "Boa guest build failed (requires rustup target add wasm32-wasip1)"
     );
+    // Preparing the bundled guest exceeds the Windows build executable's
+    // default main-thread stack in release mode.
+    std::thread::Builder::new()
+        .name("bundle-guest".into())
+        .stack_size(16 * 1024 * 1024)
+        .spawn(move || bundle_guest(build, out))
+        .expect("start guest bundling thread")
+        .join()
+        .expect("bundle guest");
+}
+
+fn bundle_guest(build: PathBuf, out: PathBuf) {
     let wasm = fs::read(build.join("wasm32-wasip1/release/vendredi_script_guest.wasm")).unwrap();
     let engine = script_config::engine().unwrap();
     let artifact = engine
