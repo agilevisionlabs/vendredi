@@ -128,6 +128,14 @@ fn main() -> Result<()> {
             runner.wait()
         }
         [cmd, sub, dir] if cmd == "case" && sub == "list" => cases::list(Path::new(dir)),
+        [cmd, sub, dir, source] if cmd == "case" && sub == "import" => {
+            cases::import_command(Path::new(dir), source, false)
+        }
+        [cmd, sub, dir, source, flag]
+            if cmd == "case" && sub == "import" && flag == "--replace" =>
+        {
+            cases::import_command(Path::new(dir), source, true)
+        }
         [cmd, sub, dir, partner, id] if cmd == "case" && sub == "use" => {
             offline(dir, vec!["case".into(), partner.clone(), id.clone()])
         }
@@ -142,7 +150,7 @@ fn main() -> Result<()> {
             offline(dir, words)
         }
         _ => bail!(
-            "usage: vendredi [gui WORKSPACE | init WORKSPACE | run --headless WORKSPACE | send WORKSPACE PARTNER FILE [FUNCTION] | resend WORKSPACE ID | inspect WORKSPACE ID | sample WORKSPACE PARTNER SAMPLE | initiate WORKSPACE PARTNER NAME | case list WORKSPACE | case use WORKSPACE PARTNER CASE]"
+            "usage: vendredi [gui WORKSPACE | init WORKSPACE | run --headless WORKSPACE | send WORKSPACE PARTNER FILE [FUNCTION] | resend WORKSPACE ID | inspect WORKSPACE ID | sample WORKSPACE PARTNER SAMPLE | initiate WORKSPACE PARTNER NAME | case list WORKSPACE | case use WORKSPACE PARTNER CASE | case import WORKSPACE PATH-OR-URL [--replace]]"
         ),
     }
 }

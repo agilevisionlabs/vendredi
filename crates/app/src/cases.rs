@@ -1,7 +1,11 @@
 //! `vendredi case` commands that work on the files of a workspace.
 use anyhow::Result;
 use std::path::Path;
-use vendredi_core::{case, config::Workspace};
+use vendredi_core::{
+    case,
+    config::Workspace,
+    import::{self, Change, Incoming},
+};
 
 /// Prints each installed case and the partners it is attached to.
 pub fn list(dir: &Path) -> Result<()> {
@@ -57,5 +61,62 @@ pub fn list(dir: &Path) -> Result<()> {
             c.name
         );
     }
+    Ok(())
+}
+
+fn now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64)
+}
+
+/// Fetches and checks a case or catalog and describes what installing it
+/// would change.
+pub fn preview(root: &Path, source: &str) -> Result<(Vec<Incoming>, Vec<Change>)> {
+    let incoming = import::gather(source, &mut vendredi_transports::fetch, now())?;
+    let changes = import::plan(root, &incoming)?;
+    Ok((incoming, changes))
+}
+
+pub fn describe(incoming: &[Incoming], changes: &[Change]) -> Vec<String> {
+    let mut lines = Vec::new();
+    for (i, change) in incoming.iter().zip(changes) {
+        let c = &i.bundle.case;
+        let state = match change {
+            Change::New => "new",
+            Change::Unchanged => "unchanged",
+            Change::Changed(_) => "changed",
+        };
+        lines.push(format!("{state:<9} {:<28} {}", c.id, c.name));
+        if let Change::Changed(diff) = change {
+            lines.extend(diff.iter().map(|d| format!("          {d}")));
+        }
+    }
+    lines
+}
+
+/// `vendredi case import WORKSPACE SOURCE [--replace]`
+pub fn import_command(dir: &Path, source: &str, replace: bool) -> Result<()> {
+    // The workspace may be unloadable until the cases it attaches are imported.
+    anyhow::ensure!(
+        dir.join("vendredi.toml").is_file(),
+        "{} has no vendredi.toml",
+        dir.display()
+    );
+    let root = dir.canonicalize()?;
+    let (incoming, changes) = preview(&root, source)?;
+    for line in describe(&incoming, &changes) {
+        println!("{line}");
+    }
+    import::apply(&root, &incoming, replace).map_err(|e| {
+        anyhow::anyhow!("{e:#}. Nothing was imported; rerun with --replace to replace them")
+    })?;
+    Workspace::load(&root)?;
+    let written = changes.iter().filter(|c| **c != Change::Unchanged).count();
+    println!(
+        "Imported {written} case{} into {}",
+        if written == 1 { "" } else { "s" },
+        root.join(case::DIRECTORY).display()
+    );
     Ok(())
 }

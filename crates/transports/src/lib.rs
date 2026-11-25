@@ -239,3 +239,70 @@ pub fn deliver(root: &Path, d: &Delivery) -> Result<String> {
         }
     }
 }
+
+/// Roots for case imports: the bundled web roots plus the platform's own,
+/// which also honours `SSL_CERT_FILE` for private or test servers.
+fn tls() -> Arc<rustls::ClientConfig> {
+    use std::sync::OnceLock;
+    static CONFIG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
+    CONFIG
+        .get_or_init(|| {
+            let mut roots = rustls::RootCertStore::empty();
+            roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+            for cert in rustls_native_certs::load_native_certs().certs {
+                let _ = roots.add(cert);
+            }
+            let provider = Arc::new(rustls::crypto::ring::default_provider());
+            Arc::new(
+                rustls::ClientConfig::builder_with_provider(provider)
+                    .with_safe_default_protocol_versions()
+                    .expect("TLS protocol versions")
+                    .with_root_certificates(roots)
+                    .with_no_client_auth(),
+            )
+        })
+        .clone()
+}
+
+/// Fetches one file of a case import. URLs must use HTTPS, including every
+/// redirect, and each response is limited in size and time.
+pub fn fetch(location: &vendredi_core::import::Location) -> Result<Vec<u8>> {
+    use std::io::Read;
+    use vendredi_core::{case::FILE_LIMIT, import::Location};
+    let Location::Url(start) = location else {
+        return vendredi_core::import::read_file(location);
+    };
+    let agent = ureq::AgentBuilder::new()
+        .redirects(0)
+        .timeout(Duration::from_secs(20))
+        .tls_config(tls())
+        .user_agent(concat!("Vendredi/", env!("CARGO_PKG_VERSION")))
+        .build();
+    let mut url = start.clone();
+    for _ in 0..5 {
+        anyhow::ensure!(url.scheme() == "https", "refusing non-HTTPS URL {url}");
+        let res = match agent.get(url.as_str()).call() {
+            Ok(res) => res,
+            Err(ureq::Error::Status(code, _)) => bail!("HTTP {code}"),
+            Err(ureq::Error::Transport(e)) => return Err(anyhow!("{e}")),
+        };
+        if (300..400).contains(&res.status()) {
+            let next = res
+                .header("Location")
+                .context("redirect without a location")?;
+            url = url.join(next)?;
+            continue;
+        }
+        anyhow::ensure!(res.status() == 200, "HTTP {}", res.status());
+        let mut bytes = Vec::new();
+        res.into_reader()
+            .take(FILE_LIMIT as u64 + 1)
+            .read_to_end(&mut bytes)?;
+        anyhow::ensure!(
+            bytes.len() <= FILE_LIMIT,
+            "response exceeds {FILE_LIMIT} bytes"
+        );
+        return Ok(bytes);
+    }
+    bail!("too many redirects")
+}

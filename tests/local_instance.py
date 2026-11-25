@@ -9,6 +9,7 @@ from pathlib import Path
 import queue
 import shutil
 import socket
+import ssl
 import sqlite3
 import subprocess
 import tarfile
@@ -21,6 +22,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 BINARY = ROOT / "target/debug/vendredi"
 SAMPLE = ROOT / "examples/orders"
+CASES = ROOT / "examples/cases"
 
 
 def port():
@@ -74,6 +76,69 @@ class Instance:
         self.reader.join(timeout=2)
         for pipe in (self.proc.stdin, self.proc.stdout, self.proc.stderr):
             pipe.close()
+
+
+@contextlib.contextmanager
+def https_library(root):
+    """Serve the starter cases and some broken sources over local HTTPS."""
+    authority, server_key, server_cert = root / "ca.pem", root / "server.key", root / "server.pem"
+    openssl = lambda *args: subprocess.run(["openssl", *args], check=True, capture_output=True)
+    openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-keyout", root / "ca.key",
+            "-out", authority, "-subj", "/CN=Vendredi test CA",
+            "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign")
+    openssl("req", "-newkey", "rsa:2048", "-nodes", "-keyout", server_key, "-out", root / "server.csr",
+            "-subj", "/CN=127.0.0.1")
+    (root / "server.ext").write_text("basicConstraints=CA:FALSE\nsubjectAltName=IP:127.0.0.1\n")
+    openssl("x509", "-req", "-in", root / "server.csr", "-CA", authority, "-CAkey", root / "ca.key",
+            "-CAcreateserial", "-days", "1", "-out", server_cert, "-extfile", root / "server.ext")
+    broken = json.loads((CASES / "reject-orders.json").read_text())
+    broken["files"]["nack.edi"] = "not EDIFACT"
+    extra = {
+        "/broken/catalog.json": json.dumps({"vendredi_catalog": 1, "cases": ["reject.json"]}),
+        "/broken/reject.json": json.dumps(broken),
+        "/big.json": "{" + " " * (1024 * 1024 + 1) + "}",
+    }
+    class Library(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=CASES, **kwargs)
+        def do_GET(self):
+            if self.path == "/redirect.json":
+                self.send_response(302)
+                self.send_header("Location", f"http://127.0.0.1:{self.server.server_port}/catalog.json")
+                self.end_headers()
+            elif self.path in extra:
+                body = extra[self.path].encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                super().do_GET()
+        def log_message(self, *args):
+            pass
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(server_cert, server_key)
+    with http.server.ThreadingHTTPServer(("127.0.0.1", 0), Library) as server:
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            yield f"https://127.0.0.1:{server.server_port}", authority
+        finally:
+            server.shutdown()
+            thread.join()
+
+
+def snapshot(folder):
+    """Every installed case file, without the import time and source."""
+    files = {}
+    for path in sorted(folder.rglob("*")):
+        if path.is_file():
+            data = path.read_bytes()
+            if path.name == ".vendredi-source.json":
+                data = json.loads(data)["sha256"].encode()
+            files[path.relative_to(folder).as_posix()] = data
+    return files
 
 
 class LocalExchange(unittest.TestCase):
@@ -317,6 +382,40 @@ class LocalExchange(unittest.TestCase):
         self.assertIn(b"INVOIC:D:96A:UN", (self.root / "replies" / f"vendredi-{invoice}.edi").read_bytes())
         subprocess.run([BINARY, "case", "use", self.root, "Supplier", "default"], check=True, capture_output=True)
         self.assertNotIn("\ncase =", (self.root / "vendredi.toml").read_text())
+
+    def test_import_cases_from_folder_and_https(self):
+        folder, remote = self.root / "folder", self.root / "remote"
+        for workspace in (folder, remote):
+            subprocess.run([BINARY, "init", workspace], check=True, capture_output=True)
+            shutil.rmtree(workspace / "cases")
+        run = lambda workspace, *args, env=None: subprocess.run(
+            [BINARY, "case", "import", workspace, *args], capture_output=True, text=True, env=env)
+        result = run(folder, CASES)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Imported 11 cases", result.stdout)
+        with https_library(self.root) as (base, certificate):
+            env = dict(os.environ, SSL_CERT_FILE=str(certificate))
+            untrusted = run(remote, f"{base}/catalog.json")
+            self.assertNotEqual(untrusted.returncode, 0)
+            self.assertFalse((remote / "cases").exists())
+            for source, message in [
+                (f"{base}/broken/catalog.json", "nack.edi"),
+                (f"{base}/big.json", "exceeds"),
+                (f"{base}/redirect.json", "non-HTTPS"),
+                (f"http://127.0.0.1:1/catalog.json", "only https"),
+            ]:
+                with self.subTest(source=source):
+                    result = run(remote, source, env=env)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(message, result.stderr)
+                    self.assertFalse((remote / "cases").exists())
+            result = run(remote, f"{base}/catalog.json", env=env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            source = json.loads((remote / "cases/send-invoice/.vendredi-source.json").read_text())
+            self.assertEqual(source["source"], f"{base}/send-invoice.json")
+        self.assertEqual(snapshot(folder / "cases"), snapshot(remote / "cases"))
+        listed = subprocess.run([BINARY, "case", "list", remote], check=True, capture_output=True, text=True)
+        self.assertIn("send-invoice", listed.stdout)
 
     def test_envelope_faults_and_duplicate_delivery(self):
         self.config = self.config.replace('url = "http://127.0.0.1:8181/replies"', 'directory = "out"')
