@@ -24,19 +24,52 @@ fn compile(cx: &mut Context, source: &str, function: &str, input_json: &str) -> 
     );
     let program = format!(
         r#"((input) => {{
-        const effects = {{ sends: [], logs: [], state: input.state, reference: input.reference, acknowledge: false }};
+        const effects = {{ sends: [], logs: [], state: input.state, reference: input.reference, acknowledge: false, deprecated: [] }};
+        // Helpers stay in this closure so workspace scripts may reuse their names.
+        const [api, vendrediInterchange] = (() => {{
+        const deprecated = name => {{ if (!effects.deprecated.includes(name)) effects.deprecated.push(name); }};
+        const interchange = input.interchange;
+        if (interchange !== null && input.legacy) {{
+            for (const key of ["header", "messages", "findings", "syntax"]) {{
+                Object.defineProperty(interchange, key, {{ get() {{ deprecated("interchange." + key); return input.legacy[key]; }} }});
+            }}
+        }}
+        const acknowledge = () => {{ effects.acknowledge = true; }};
         const api = Object.freeze({{
-            send: message => effects.sends.push(String(message)),
-            build: (type, body) => "UNH+1+" + type + "'" + body + "UNT+0+1'",
-            contrl: () => {{ effects.acknowledge = true; }},
+            send: message => {{
+                if (typeof message === "string") {{
+                    deprecated("api.send(text)");
+                    effects.sends.push(message);
+                }} else if (message !== null && typeof message === "object") {{
+                    effects.sends.push(JSON.parse(JSON.stringify(message)));
+                }} else {{
+                    throw new TypeError("api.send expects a message from api.build");
+                }}
+            }},
+            build: (type, version, segments, options) => {{
+                if (segments === undefined && typeof version === "string" && String(type).includes(":")) {{
+                    deprecated("api.build(type, text)");
+                    return "UNH+1+" + type + "'" + version + "UNT+0+1'";
+                }}
+                if (!Array.isArray(segments)) throw new TypeError("api.build expects an array of segments");
+                const message = {{ type: String(type), version: String(version), segments }};
+                for (const key of ["agency", "association"]) {{
+                    if (options && options[key] !== undefined) message[key] = String(options[key]);
+                }}
+                return message;
+            }},
+            ack: acknowledge,
+            contrl: acknowledge,
             nextReference: () => String(++effects.reference),
             now: () => input.now,
             log: value => effects.logs.push(String(value)),
             get: key => effects.state[key],
             set: (key, value) => {{ effects.state[key] = value; }}
         }});
+        return [api, interchange];
+        }})();
         {source}
-        {function}(input.interchange, api);
+        {function}(vendrediInterchange, api);
         return JSON.stringify(effects);
     }})(JSON.parse({data}))"#,
         data = serde_json::to_string(input_json)?

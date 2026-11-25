@@ -12,8 +12,13 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 #[derive(Serialize)]
-pub struct Input<'a, T = Value> {
-    pub interchange: &'a T,
+pub struct Input<'a, L = Value> {
+    /// The standard-neutral view from `contract::interchange`, or null for a
+    /// partner-initiated send.
+    pub interchange: &'a Value,
+    /// The 0.1 interchange layout, served through deprecated properties.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub legacy: Option<&'a L>,
     pub state: &'a BTreeMap<String, Value>,
     pub reference: i64,
     pub now: i64,
@@ -21,11 +26,15 @@ pub struct Input<'a, T = Value> {
 
 #[derive(Deserialize, Default)]
 pub struct Effects {
-    pub sends: Vec<String>,
+    /// Message objects from `api.build`, or raw EDIFACT text from 0.1 scripts.
+    pub sends: Vec<Value>,
     pub logs: Vec<String>,
     pub state: BTreeMap<String, Value>,
     pub reference: i64,
     pub acknowledge: bool,
+    /// The deprecated script features this invocation used.
+    #[serde(default)]
+    pub deprecated: Vec<String>,
 }
 
 const SOURCE_LIMIT: usize = 64 * 1024;
@@ -177,10 +186,10 @@ pub fn validate(source: &str, function: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn run<T: Serialize>(source: &str, function: &str, input: &Input<'_, T>) -> Result<Effects> {
+pub fn run<L: Serialize>(source: &str, function: &str, input: &Input<'_, L>) -> Result<Effects> {
     let effects: Effects = serde_json::from_slice(&call(source, function, Some(input))?)?;
     ensure!(
-        effects.sends.len() <= 64 && effects.logs.len() <= 128,
+        effects.sends.len() <= 64 && effects.logs.len() <= 128 && effects.deprecated.len() <= 16,
         "too many script sends or logs"
     );
     encode(&effects.state, STATE_LIMIT)?;
@@ -199,8 +208,9 @@ mod tests {
     use super::*;
     #[test]
     fn engine_recovers_after_each_limit() {
-        let input = Input {
+        let input = Input::<Value> {
             interchange: &Value::Null,
+            legacy: None,
             state: &BTreeMap::new(),
             reference: 0,
             now: 1,

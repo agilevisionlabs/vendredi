@@ -1,5 +1,6 @@
 use crate::{
     config::*,
+    contract,
     edi::{self, Finding, Interchange, Message},
     script,
     store::Store,
@@ -721,11 +722,17 @@ impl Engine {
                 )?;
                 let reference = rows[0].get::<i64>(0)?;
                 let state: BTreeMap<_, _> = serde_json::from_str(&rows[0].get::<String>(1)?)?;
+                let standard = self.workspace.partners[t.partner].standard;
+                let view = t
+                    .inbound
+                    .as_deref()
+                    .map_or(Value::Null, |i| contract::interchange(i, standard));
                 let effects = script::run(
                     &script::read_source(self.workspace.root.join(path))?,
                     function,
                     &script::Input {
-                        interchange: &t.inbound.as_deref(),
+                        interchange: &view,
+                        legacy: t.inbound.as_deref(),
                         state: &state,
                         reference,
                         now: self.clock.millis(),
@@ -734,11 +741,18 @@ impl Engine {
                 let messages = effects
                     .sends
                     .iter()
-                    .map(|raw| edi::script_document(raw))
+                    .enumerate()
+                    .map(|(n, send)| {
+                        match send {
+                            Value::String(raw) => edi::script_document(raw),
+                            other => contract::built(other, standard),
+                        }
+                        .with_context(|| format!("script send {}", n + 1))
+                    })
                     .collect::<Result<Vec<_>>>()?;
                 ensure!(
                     !effects.acknowledge || t.inbound.is_some(),
-                    "CONTRL needs an inbound interchange"
+                    "an acknowledgement needs an inbound interchange"
                 );
                 self.store.exec(
                     "UPDATE partner_state SET reference=?,data=? WHERE partner=?",
@@ -753,6 +767,13 @@ impl Engine {
                         "script_log",
                         t.root,
                         json!({"execution":t.execution,"text":line}),
+                    )?;
+                }
+                for feature in effects.deprecated {
+                    self.event(
+                        "deprecated",
+                        t.root,
+                        json!({"execution":t.execution,"script":path,"feature":feature}),
                     )?;
                 }
                 if effects.acknowledge {
@@ -1161,6 +1182,126 @@ mod tests {
         );
         Ok(())
     }
+    fn script_replies(
+        w: &Workspace,
+        dir: &Path,
+        source: &str,
+        order: &[u8],
+    ) -> Result<(Vec<Delivery>, Vec<Value>)> {
+        fs::write(dir.join("reply.js"), source)?;
+        let mut w = w.clone();
+        w.partners[0].acknowledge = Policy::Never;
+        w.partners[0].rules[0].actions = vec![Action::Script {
+            script: "reply.js".into(),
+            function: "reply".into(),
+        }];
+        fs::remove_dir_all(dir.join(".vendredi")).ok();
+        let date = "2026-11-24T10:30:00Z".parse::<DateTime<Utc>>()?;
+        let mut e = Engine::open(w, Arc::new(Manual(AtomicI64::new(date.timestamp_millis()))))?;
+        input(&mut e, 0, order)?;
+        let events = e.take_events();
+        assert!(events.iter().all(|v| v["error"].is_null()), "{events:#?}");
+        Ok((e.take_deliveries(), events))
+    }
+    fn deprecations(events: &[Value]) -> Vec<&str> {
+        events
+            .iter()
+            .filter(|v| v["event"] == "deprecated")
+            .map(|v| v["feature"].as_str().unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn structured_script_messages_match_legacy_text() -> Result<()> {
+        let (dir, w) = fixture()?;
+        let (legacy, events) = script_replies(
+            &w,
+            dir.path(),
+            "function reply(i, api) { api.send(api.build('ORDRSP:D:96A:UN', \"BGM+231+\" + i.messages[0].segments[1].elements[1][0] + \"+9'\")); }",
+            ORDER,
+        )?;
+        assert_eq!(
+            deprecations(&events),
+            [
+                "interchange.messages",
+                "api.build(type, text)",
+                "api.send(text)"
+            ]
+        );
+        let (structured, events) = script_replies(
+            &w,
+            dir.path(),
+            "function reply(i, api) {
+                const order = i.groups[0].messages[0];
+                const bgm = order.segments.find(s => s[0] === 'BGM');
+                api.send(api.build('ORDRSP', order.version, [['BGM', '231', bgm[2], '9']]));
+            }",
+            ORDER,
+        )?;
+        assert!(deprecations(&events).is_empty());
+        assert_eq!(legacy.len(), 1);
+        assert_eq!(legacy[0].bytes, structured[0].bytes);
+        assert_eq!(
+            structured[0].bytes,
+            b"UNB+UNOC:3+SUPPLIER:ZZ+BUYER:ZZ+261124:1030+1'UNH+1+ORDRSP:D:96A:UN'BGM+231+PO42+9'UNT+3+1'UNZ+1+1'"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn script_values_round_trip_custom_separators_and_acknowledge() -> Result<()> {
+        let (dir, mut w) = fixture()?;
+        w.partners[0].separators = Some("*;,! ~".into());
+        let order = b"UNA*;,! ~UNB;UNOC*3;BUYER*ZZ;SUPPLIER*ZZ;261124*1030;7~UNH;1;ORDERS*D*96A*UN~FTX;AAI;;;a!;b!*c!~d!!e'f+g:h?i~UNT;3;1~UNZ;1;7~";
+        let (replies, _) = script_replies(
+            &w,
+            dir.path(),
+            "function reply(i, api) {
+                const ftx = i.groups[0].messages[0].segments[0];
+                api.log(JSON.stringify(ftx));
+                api.ack();
+                api.send(api.build('ORDRSP', 'D96A', [['FTX', 'AAI', '', '', ftx[4]]]));
+            }",
+            order,
+        )?;
+        assert_eq!(replies.len(), 2);
+        let parsed = edi::parse(&replies[1].bytes);
+        let i = &parsed.interchanges[0];
+        assert!(i.findings.is_empty(), "{:?}", i.findings);
+        assert_eq!(i.syntax.0, *b"*;,! ~");
+        assert_eq!(i.messages[0].segments[1].at(3, 0), "a;b*c~d!e'f+g:h?i");
+        assert_eq!(
+            edi::parse(&replies[0].bytes).interchanges[0].messages[0].kind(),
+            "CONTRL"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_script_messages_fail_the_action() -> Result<()> {
+        let (dir, mut w) = fixture()?;
+        fs::write(
+            dir.path().join("reply.js"),
+            "function reply(i, api) { api.send(api.build('ORDRSP', 'D96A', [['UNZ', '1']])); }",
+        )?;
+        w.partners[0].rules[0].actions = vec![Action::Script {
+            script: "reply.js".into(),
+            function: "reply".into(),
+        }];
+        let mut e = Engine::open(w, Arc::new(SystemClock))?;
+        input(&mut e, 0, ORDER)?;
+        let error = e
+            .take_events()
+            .into_iter()
+            .find_map(|v| v["error"].as_str().map(str::to_owned))
+            .unwrap();
+        assert!(
+            error.contains("script send 1") && error.contains("envelope"),
+            "{error}"
+        );
+        Ok(())
+    }
+
     #[test]
     fn bad_input_and_failed_script_leave_engine_available() -> Result<()> {
         let (dir, mut w) = fixture()?;
