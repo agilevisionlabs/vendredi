@@ -271,6 +271,53 @@ class LocalExchange(unittest.TestCase):
         self.assertEqual(messages["structured"],
                          b"UNH+1+ORDRSP:D:96A:UN'BGM+231+PO42+9'FTX+AAI+++a?+b?:c'UNT+4+1'")
 
+    def test_cases_switch_while_listening_and_persist(self):
+        subprocess.run([BINARY, "init", self.root], check=True, capture_output=True)
+        config = (self.root / "vendredi.toml").read_text()
+        self.assertIn('cases = ["confirm-orders"', config)
+        self.config = config.replace(":8180", f":{self.listener}")
+        listed = subprocess.run([BINARY, "case", "list", self.root], check=True, capture_output=True, text=True).stdout
+        self.assertIn("* default", listed)
+        self.assertIn("reject-orders", listed)
+        app = self.launch()
+        self.assertEqual(self.post(self.order), (202, b""))
+        app.wait("delivered")
+        app.wait("delivered")
+        app.command("case", "Supplier", "reject-orders")
+        self.assertEqual(app.wait("case_switched")["to"], "reject-orders")
+        self.assertEqual(self.post(self.order), (202, b""))
+        execution = app.wait("execution")
+        self.assertEqual((execution["name"], execution["case"]), ("acknowledge", "reject-orders"))
+        rejected = app.wait("delivered")["transfer"]
+        app.command("case", "Supplier", "failing-http")
+        app.wait("case_switched")
+        self.assertEqual(self.post(self.order)[0], 500)
+        app.wait("delivered")
+        app.wait("delivered")
+        app.command("case", "Supplier", "missing")
+        self.assertIn("not installed", app.events.get(timeout=10)["error"])
+        app.close()
+        self.assertIn(b"UCI+ORDER42+BUYER:ZZ+SUPPLIER:ZZ+4'",
+                      (self.root / "replies" / f"vendredi-{rejected}.edi").read_bytes())
+        self.assertIn('case = "failing-http"', (self.root / "vendredi.toml").read_text())
+
+        # The active case survives a restart, and samples come from it.
+        self.config = (self.root / "vendredi.toml").read_text()
+        app = self.launch()
+        app.command("case", "Supplier", "send-invoice")
+        app.wait("case_switched")
+        app.command("sample", "Supplier", "Order")
+        received = app.wait("received")
+        self.assertEqual(received["metadata"], {"case": "send-invoice", "sample": "Order"})
+        app.wait("delivered")
+        app.wait("delivered")
+        app.command("initiate", "Supplier", "Invoice")
+        invoice = app.wait("delivered")["transfer"]
+        app.close()
+        self.assertIn(b"INVOIC:D:96A:UN", (self.root / "replies" / f"vendredi-{invoice}.edi").read_bytes())
+        subprocess.run([BINARY, "case", "use", self.root, "Supplier", "default"], check=True, capture_output=True)
+        self.assertNotIn("\ncase =", (self.root / "vendredi.toml").read_text())
+
     def test_envelope_faults_and_duplicate_delivery(self):
         self.config = self.config.replace('url = "http://127.0.0.1:8181/replies"', 'directory = "out"')
         actions = '{ fault = "duplicate_reference" }, { fault = "wrong_count" }, { fault = "duplicate" }, { document = "confirmation.edi" }'
@@ -335,6 +382,7 @@ if __name__ == "__main__":
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--binary", type=Path, default=BINARY)
     source.add_argument("--archive", type=Path, help="test the executable extracted from a release archive")
+    parser.add_argument("tests", nargs="*", help="test names, such as LocalExchange.test_folder_publication_and_recovered_claim")
     args = parser.parse_args()
     BINARY = args.binary.resolve()
     with tempfile.TemporaryDirectory() as tmp:
@@ -352,4 +400,4 @@ if __name__ == "__main__":
                 with tarfile.open(args.archive) as package:
                     BINARY.write_bytes(package.extractfile("vendredi").read())
             BINARY.chmod(0o755)
-        unittest.main(argv=["local_instance"], verbosity=2)
+        unittest.main(argv=["local_instance", *args.tests], verbosity=2)
