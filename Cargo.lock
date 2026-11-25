@@ -4631,7 +4631,7 @@ checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "vendredi"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "eframe",
@@ -4644,7 +4644,7 @@ dependencies = [
 
 [[package]]
 name = "vendredi-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4662,7 +4662,7 @@ dependencies = [
 
 [[package]]
 name = "vendredi-script-guest"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "boa_engine",
@@ -4672,7 +4672,7 @@ dependencies = [
 
 [[package]]
 name = "vendredi-transports"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "notify",
