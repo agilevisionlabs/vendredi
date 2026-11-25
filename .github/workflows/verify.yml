@@ -55,8 +55,10 @@ jobs:
           ./tests/release_windows.ps1 target/release/vendredi.exe
       - run: python scripts/package_release.py target/release/${{ matrix.binary }} ${{ matrix.artifact }}
       - run: python tests/local_instance.py --archive target/dist/vendredi-${{ matrix.artifact }}.${{ runner.os == 'Windows' && 'zip' || 'tar.gz' }}
-      - run: python -m pip install psutil==7.2.2
+      - run: python -m pip install --target "${{ runner.temp }}/profile-deps" psutil==7.2.2
       - run: python tests/script_profile.py target/release/${{ matrix.binary }}
+        env:
+          PYTHONPATH: ${{ runner.temp }}/profile-deps
       - if: runner.os == 'macOS'
         run: python3 tests/release_macos.py target/dist/vendredi-${{ matrix.artifact }}.tar.gz
       - uses: actions/upload-artifact@v7.0.2
