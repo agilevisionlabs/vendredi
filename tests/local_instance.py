@@ -307,11 +307,13 @@ if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as tmp:
         if args.archive:
             if args.archive.suffix == ".zip":
+                # A Developer ID signature binds the Mac executable to its bundle, and macOS
+                # kills it when it runs anywhere else, so the app is extracted whole.
                 with zipfile.ZipFile(args.archive) as package:
                     names = {"vendredi.exe", "Vendredi.app/Contents/MacOS/vendredi"}
                     member, = names.intersection(package.namelist())
-                    BINARY = Path(tmp) / Path(member).name
-                    BINARY.write_bytes(package.read(member))
+                    package.extractall(tmp)
+                    BINARY = Path(tmp) / member
             else:
                 BINARY = Path(tmp) / "vendredi"
                 with tarfile.open(args.archive) as package:
