@@ -36,7 +36,7 @@ impl ScriptForm {
             file: String::new(),
             function: "onMessage".into(),
             source:
-                "function onMessage(interchange, api) {\n    api.log(\"Received message\");\n}\n"
+                "function onMessage(interchange, api) {\n    const message = interchange.groups[0].messages[0];\n    api.log(\"Received \" + message.type);\n    // api.send(api.build(\"ORDRSP\", message.version, [[\"BGM\", \"231\", api.nextReference(), \"9\"]]));\n}\n"
                     .into(),
             original: None,
             error: String::new(),

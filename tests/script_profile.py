@@ -22,7 +22,7 @@ def measure(binary):
             .replace('{ document = "confirmation.edi" }', '{ script = "reply.js", function = "reply" }'))
         (root / "reply.js").write_text("""function reply(i,a) {
             a.set("runs", (a.get("runs") || 0) + 1);
-            a.send(a.build("ORDRSP:D:96A:UN", "BGM+231'"));
+            a.send(a.build("ORDRSP", "D96A", [["BGM", "231"]]));
         }""")
         start = time.perf_counter()
         app = local.Instance(root)

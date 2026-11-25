@@ -158,7 +158,7 @@ class LocalExchange(unittest.TestCase):
     def test_slow_and_silent_http_receipts_preserve_scripted_content_fault(self):
         base = self.config.replace('url = "http://127.0.0.1:8181/replies"', 'directory = "out"')
         (self.root / "reply.js").write_text("""function reply(inbound, api) {
-            api.send(api.build("ORDRSP:D:96A:UN", "FTX+example'"));
+            api.send(api.build("ORDRSP", "D96A", [["FTX", "example"]]));
         }""")
         for fault in ["slow_response", "no_response"]:
             with self.subTest(fault=fault):
@@ -188,7 +188,7 @@ class LocalExchange(unittest.TestCase):
             const calls = (api.get("calls") || 0) + 1;
             api.set("calls", calls);
             api.log((inbound === null ? "command" : "order") + "-" + calls);
-            api.send(api.build("ORDRSP:D:96A:UN", "BGM+231+" + api.nextReference() + "'"));
+            api.send(api.build("ORDRSP", "D96A", [["BGM", "231", api.nextReference()]]));
         }"""
         (self.root / "reply.js").write_text(good)
         app = self.launch()
@@ -201,7 +201,7 @@ class LocalExchange(unittest.TestCase):
         # Stage effects before each failure and check the durable state afterwards.
         prefix = """function fail(i,a) {
             a.set("calls", 99); a.nextReference(); a.log("discard");
-            a.send(a.build("ORDRSP:D:96A:UN", "BGM+discard'"));
+            a.send(a.build("ORDRSP", "D96A", [["BGM", "discard"]]));
         """
         cases = [
             ("syntax", "function fail( {", "SyntaxError"),
@@ -237,6 +237,39 @@ class LocalExchange(unittest.TestCase):
             logs = [json.loads(row[0])["text"] for row in db.execute(
                 "SELECT body FROM events WHERE json_extract(body,'$.event')='script_log' ORDER BY id")]
             self.assertEqual(logs, ["order-1", "command-2", "command-3"])
+
+    def test_structured_and_legacy_scripts_reply_identically(self):
+        base = self.config.replace('url = "http://127.0.0.1:8181/replies"', 'directory = "out"')
+        base = base.replace('{ document = "confirmation.edi" }',
+            '{ fault = "suppress_ack" }, { script = "reply.js", function = "reply" }')
+        scripts = {
+            "legacy": """function reply(inbound, api) {
+                const order = inbound.messages[0].segments[1].elements[1][0];
+                api.send(api.build("ORDRSP:D:96A:UN", "BGM+231+" + order + "+9'FTX+AAI+++a?+b?:c'"));
+            }""",
+            "structured": """function reply(inbound, api) {
+                const order = inbound.groups[0].messages[0];
+                const bgm = order.segments.find(s => s[0] === "BGM");
+                api.send(api.build("ORDRSP", order.version, [["BGM", "231", bgm[2], "9"], ["FTX", "AAI", "", "", "a+b:c"]]));
+            }""",
+        }
+        messages = {}
+        for name, source in scripts.items():
+            with self.subTest(script=name):
+                (self.root / "reply.js").write_text(source)
+                self.config = base
+                app = self.launch()
+                self.assertEqual(self.post(self.order), (202, b""))
+                transfer = app.wait("delivered")["transfer"]
+                app.close()
+                reply = (self.root / "out" / f"vendredi-{transfer}.edi").read_bytes()
+                messages[name] = reply[reply.index(b"UNH"):reply.index(b"UNZ")]
+                features = [e["feature"] for e in app.seen if e["event"] == "deprecated"]
+                expected = ["interchange.messages", "api.build(type, text)", "api.send(text)"]
+                self.assertEqual(features, expected if name == "legacy" else [])
+        self.assertEqual(messages["legacy"], messages["structured"])
+        self.assertEqual(messages["structured"],
+                         b"UNH+1+ORDRSP:D:96A:UN'BGM+231+PO42+9'FTX+AAI+++a?+b?:c'UNT+4+1'")
 
     def test_envelope_faults_and_duplicate_delivery(self):
         self.config = self.config.replace('url = "http://127.0.0.1:8181/replies"', 'directory = "out"')

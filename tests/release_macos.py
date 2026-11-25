@@ -63,7 +63,7 @@ actions = [{ script = "invoice.js", function = "reply" }]
 """)
     (workspace / "invoice.js").write_text("""function reply(i, api) {
         api.set("invoiceCount", (api.get("invoiceCount") || 0) + 1);
-        api.send(api.build("ORDRSP:D:96A:UN", "FTX+GUI-SCRIPT'"));
+        api.send(api.build("ORDRSP", "D96A", [["FTX", "GUI-SCRIPT"]]));
     }""")
     # Launch the extracted app with no arguments and a disposable home directory.
     pid = int(subprocess.check_output([helper, "launch", app, home], timeout=30))

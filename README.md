@@ -37,18 +37,29 @@ The listener returns HTTP 202 after recording the inbound bytes. Replies use the
 - A partner can acknowledge `always`, when `requested`, or `never`. Envelope, syntax and identity findings suppress business replies. Incoming `CONTRL` messages correlate by partner identity and control reference. Ambiguous references produce an event. The engine skips automatic acknowledgements for interchanges containing a `CONTRL`.
 - Actions use `document`, `script` and `function`, `delay_ms`, or `fault`. Fault values are `reject`, `suppress_ack`, `duplicate_reference`, `wrong_count`, `duplicate`, `malformed`, `http500`, `slow_response`, and `no_response`. HTTP and acknowledgement faults affect the triggering receipt or acknowledgement. Envelope and content faults affect subsequent sends in the execution. Scheduled delays live in the running engine.
 
-A JavaScript action receives the parsed interchange and the host API. Partner-initiated scripts receive `null` for the interchange. The engine builds the envelope and counts for sent messages.
+A JavaScript action receives the inbound interchange and the host API. Partner-initiated scripts receive `null` for the interchange. The engine builds the envelope, header, trailer, counts and escaping for sent messages.
 
 ```js
 function confirm(interchange, api) {
+    const order = interchange.groups[0].messages[0];
+    const bgm = order.segments.find(s => s[0] === "BGM");
     const count = (api.get("orders") || 0) + 1;
     api.set("orders", count);
-    api.log("Confirmed order " + count);
-    api.send(api.build("ORDRSP:D:96A:UN", "BGM+231+" + count + "+9'"));
+    api.log("Confirmed order " + bgm[2]);
+    api.send(api.build("ORDRSP", order.version, [
+        ["BGM", "231", "R" + count, "9"],
+        ["DTM", ["137", "20261125", "102"]],
+    ]));
 }
 ```
 
-Scripts can also call `api.contrl()`, `api.nextReference()` and `api.now()` (Unix milliseconds). Every script runs in a fresh Wasmtime sandbox with 32 MiB of guest memory and an instruction budget. Scripts have no direct filesystem or network access. They can read the inbound interchange, update partner state and request delivery through the configured partner channel. Static documents contain a single `UNH` through `UNT` message using the default separators. The engine applies the partner’s separators and identities on delivery.
+The interchange has `standard`, `sender`, `recipient`, `reference`, `test` and `groups`. Each group holds `messages`, and each message has a `type` (`ORDERS`), a `version` (`D96A`), a `reference` and its body `segments`. A segment is an array of its tag and elements. A simple element is a string and a composite element is an array of components. Separators and release characters are already resolved, so values are plain text. `api.build(type, version, segments)` returns a message in the same shape, and `api.send(message)` queues it. An optional fourth argument sets `agency` (default `UN`) and `association`, for example `{ association: "EAN008" }`.
+
+Scripts can also call `api.ack()` to request the acknowledgement for the partner’s standard (`api.contrl()` is an alias), `api.nextReference()` and `api.now()` (Unix milliseconds). Every script runs in a fresh Wasmtime sandbox with 32 MiB of guest memory and an instruction budget. Scripts have no direct filesystem or network access. They can read the inbound interchange, update partner state and request delivery through the configured partner channel. Static documents contain a single `UNH` through `UNT` message using the default separators. The engine applies the partner’s separators and identities on delivery.
+
+Scripts written for 0.1 keep working: `api.build("ORDRSP:D:96A:UN", "BGM+231'")` with raw segment text, `api.send` of that text, and the `messages`, `header`, `findings` and `syntax` properties of the interchange. Each use records a `deprecated` event naming the feature.
+
+Rules match `message`, the message type or X12 transaction set, and an optional `version`, such as `D96A` or the X12 `GS08` value `005010`. A bare directory such as `D` matches every release. Workspaces from 0.1 that set `version = "D"` and `release = "96A"` load unchanged.
 
 ## Build and test
 
