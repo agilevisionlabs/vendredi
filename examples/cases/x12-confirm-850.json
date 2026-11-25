@@ -1,0 +1,47 @@
+{
+  "vendredi_case": 1,
+  "id": "x12-confirm-850",
+  "name": "Confirm every purchase order (X12)",
+  "description": "Acknowledges each 850 group with a 997 and confirms each purchase order with an 855 that echoes its number and date.",
+  "standard": "x12",
+  "tags": [
+    "x12",
+    "orders",
+    "happy-path"
+  ],
+  "acknowledge": "always",
+  "rules": [
+    {
+      "name": "Purchase orders",
+      "message": "850",
+      "version": "005010",
+      "actions": [
+        {
+          "script": "confirm.js",
+          "function": "confirm"
+        }
+      ]
+    }
+  ],
+  "samples": [
+    {
+      "name": "Purchase order",
+      "document": "850.edi"
+    }
+  ],
+  "expect": [
+    {
+      "sample": "Purchase order",
+      "replies": [
+        "997.edi",
+        "855.edi"
+      ]
+    }
+  ],
+  "files": {
+    "850.edi": "ST*850*0001~BEG*00*SA*PO7001**20261125~PO1*1*10*EA*4.5**VP*BOLT~CTT*1~SE*5*0001~",
+    "997.edi": "ST*997*0001~AK1*PO*1*005010~AK2*850*0001~AK5*A~AK9*A*1*1*1~SE*6*0001~",
+    "855.edi": "ST*855*0001~BAK*00*AC*PO7001*20261125~SE*3*0001~",
+    "confirm.js": "function confirm(interchange, api) {\n    for (const group of interchange.groups) {\n        for (const order of group.messages) {\n            const beg = order.segments.find(s => s[0] === \"BEG\");\n            api.send(api.build(\"855\", group.version, [[\"BAK\", \"00\", \"AC\", beg[3], beg[5]]]));\n        }\n    }\n}\n"
+  }
+}

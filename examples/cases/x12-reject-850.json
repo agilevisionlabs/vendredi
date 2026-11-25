@@ -1,0 +1,44 @@
+{
+  "vendredi_case": 1,
+  "id": "x12-reject-850",
+  "name": "Reject every purchase order (X12)",
+  "description": "Answers each 850 group with a 997 that rejects every transaction set and sends no 855.",
+  "standard": "x12",
+  "tags": [
+    "x12",
+    "orders",
+    "fault",
+    "reject"
+  ],
+  "acknowledge": "always",
+  "rules": [
+    {
+      "name": "Purchase orders",
+      "message": "850",
+      "version": "005010",
+      "actions": [
+        {
+          "fault": "reject"
+        }
+      ]
+    }
+  ],
+  "samples": [
+    {
+      "name": "Purchase order",
+      "document": "850.edi"
+    }
+  ],
+  "expect": [
+    {
+      "sample": "Purchase order",
+      "replies": [
+        "997.edi"
+      ]
+    }
+  ],
+  "files": {
+    "850.edi": "ST*850*0001~BEG*00*SA*PO7001**20261125~PO1*1*10*EA*4.5**VP*BOLT~CTT*1~SE*5*0001~",
+    "997.edi": "ST*997*0001~AK1*PO*1*005010~AK2*850*0001~AK5*R*5~AK9*R*1*1*0~SE*6*0001~"
+  }
+}

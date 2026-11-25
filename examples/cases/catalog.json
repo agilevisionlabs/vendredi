@@ -12,6 +12,8 @@
     "duplicate-delivery.json",
     "malformed-reply.json",
     "wrong-count.json",
-    "send-invoice.json"
+    "send-invoice.json",
+    "x12-confirm-850.json",
+    "x12-reject-850.json"
   ]
 }

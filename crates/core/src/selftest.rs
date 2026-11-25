@@ -132,18 +132,15 @@ fn replies(bundle: &Bundle, e: &case::Expect) -> Result<Vec<String>> {
     ensure!(errors.is_empty(), "an action failed: {}", errors.join("; "));
     let mut texts = Vec::new();
     for d in sent {
-        let parsed = edi::parse(&d.bytes);
-        let messages: Vec<_> = parsed
-            .interchanges
-            .iter()
-            .flat_map(|i| &i.messages)
-            .collect();
+        let parsed = interchange::parse(&d.bytes);
+        let mut messages = Vec::new();
+        for i in &parsed.interchanges {
+            messages.extend(i.message_texts()?);
+        }
         if messages.is_empty() {
             texts.push(format!("unparseable transfer: {}", edi::latin1(&d.bytes)));
         }
-        for m in messages {
-            texts.push(m.text()?);
-        }
+        texts.extend(messages);
     }
     Ok(texts)
 }

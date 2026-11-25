@@ -5,7 +5,6 @@ use crate::{
     interchange::{self, AckInfo, Interchange, Outgoing},
     script,
     store::Store,
-    x12,
 };
 use anyhow::{Context, Result, anyhow, ensure};
 use chrono::{DateTime, Utc};
@@ -1012,6 +1011,7 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::x12;
     use std::sync::atomic::{AtomicI64, Ordering};
     struct Manual(AtomicI64);
     impl Clock for Manual {

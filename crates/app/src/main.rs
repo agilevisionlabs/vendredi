@@ -30,6 +30,8 @@ const CASES: &[&str] = &[
     include_str!("../../../examples/cases/malformed-reply.json"),
     include_str!("../../../examples/cases/wrong-count.json"),
     include_str!("../../../examples/cases/send-invoice.json"),
+    include_str!("../../../examples/cases/x12-confirm-850.json"),
+    include_str!("../../../examples/cases/x12-reject-850.json"),
 ];
 
 fn sample(root: &Path) -> Result<()> {
@@ -43,7 +45,10 @@ fn sample(root: &Path) -> Result<()> {
         if !dir.exists() {
             bundle.write(&dir)?;
         }
-        ids.push(format!("{:?}", bundle.case.id));
+        // The sample partner exchanges EDIFACT; X12 cases stay installed for X12 partners.
+        if bundle.case.standard == vendredi_core::config::Standard::Edifact {
+            ids.push(format!("{:?}", bundle.case.id));
+        }
     }
     let config = CONFIG.replace(
         "url = \"http://127.0.0.1:8181/replies\" }",

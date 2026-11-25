@@ -392,7 +392,7 @@ class LocalExchange(unittest.TestCase):
             [BINARY, "case", "import", workspace, *args], capture_output=True, text=True, env=env)
         result = run(folder, CASES)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("Imported 11 cases", result.stdout)
+        self.assertIn("Imported 13 cases", result.stdout)
         with https_library(self.root) as (base, certificate):
             env = dict(os.environ, SSL_CERT_FILE=str(certificate))
             untrusted = run(remote, f"{base}/catalog.json")
@@ -420,7 +420,7 @@ class LocalExchange(unittest.TestCase):
     def test_case_self_test(self):
         result = subprocess.run([BINARY, "case", "test", CASES], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("12 passed, 0 failed", result.stdout)
+        self.assertIn("14 passed, 0 failed", result.stdout)
         case = json.loads((CASES / "send-invoice.json").read_text())
         case["files"]["expected.edi"] = case["files"]["invoic.edi"].replace("1250.00", "1250.50")
         case["expect"][1]["replies"] = ["expected.edi"]
