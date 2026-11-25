@@ -85,7 +85,13 @@ pub struct MessageInfo {
     /// The X12 `GS06` of the message's group. Empty for EDIFACT.
     pub group: String,
     pub segments: usize,
+    /// An X12 transaction set with its own count or control problems. The
+    /// group acknowledgement rejects it and no rule runs for it.
+    pub rejected: bool,
 }
+
+/// Problems that reject one X12 transaction set but not its interchange.
+const TRANSACTION_FINDINGS: [&str; 3] = ["missing_se", "se_control", "se_count"];
 
 /// An acknowledgement found in an inbound interchange.
 pub struct AckInfo {
@@ -175,23 +181,42 @@ impl Interchange {
                     reference: m.reference().into(),
                     group: String::new(),
                     segments: m.segments.len(),
+                    rejected: false,
                 })
                 .collect(),
             Self::X12(i) => i
                 .groups
                 .iter()
                 .flat_map(|g| {
-                    g.transactions.iter().map(move |t| MessageInfo {
-                        kind: t.kind().into(),
-                        version: g.version().into(),
-                        directory: g.version().into(),
-                        release: String::new(),
-                        reference: t.reference().into(),
-                        group: g.header.at(6).into(),
-                        segments: t.segments.len(),
+                    g.transactions.iter().map(move |t| {
+                        let (start, end) = (t.header().offset, t.segments.last().unwrap().offset);
+                        MessageInfo {
+                            kind: t.kind().into(),
+                            version: g.version().into(),
+                            directory: g.version().into(),
+                            release: String::new(),
+                            reference: t.reference().into(),
+                            group: g.header.at(6).into(),
+                            segments: t.segments.len(),
+                            rejected: i.findings.iter().any(|f| {
+                                TRANSACTION_FINDINGS.contains(&f.code)
+                                    && (start..=end).contains(&f.offset)
+                            }),
+                        }
                     })
                 })
                 .collect(),
+        }
+    }
+    /// Whether the interchange can be processed. EDIFACT rejects it for any
+    /// finding. X12 rejects only the transaction sets a finding falls in.
+    pub fn accepted(&self) -> bool {
+        match self {
+            Self::Edifact(i) => i.findings.is_empty(),
+            Self::X12(i) => i
+                .findings
+                .iter()
+                .all(|f| TRANSACTION_FINDINGS.contains(&f.code)),
         }
     }
     /// The script view from the `contract` module.

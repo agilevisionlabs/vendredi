@@ -5,6 +5,7 @@ use crate::{
     interchange::{self, AckInfo, Interchange, Outgoing},
     script,
     store::Store,
+    x12,
 };
 use anyhow::{Context, Result, anyhow, ensure};
 use chrono::{DateTime, Utc};
@@ -565,7 +566,7 @@ impl Engine {
                 .collect();
             let ack = partner.policy() == Policy::Always
                 || (partner.policy() == Policy::Requested && i.ack_requested());
-            let accepted = i.findings().is_empty() && !faults.contains(&Fault::Reject);
+            let accepted = i.accepted() && !faults.contains(&Fault::Reject);
             let wrong_standard = i.standard() != partner.standard;
             self.findings(id, Some(iid), i.findings())?;
             self.event("validated",Some(id),json!({"interchange":iid,"accepted":accepted,"messages":mids.len(),"findings":i.findings().len()}))?;
@@ -595,6 +596,14 @@ impl Engine {
                 self.correlate(p, id, &ack)?;
             }
             for ((m, mid), rule) in messages.iter().zip(mids).zip(rules) {
+                if m.rejected {
+                    self.event(
+                        "rejected_message",
+                        Some(id),
+                        json!({"message":mid,"type":m.kind}),
+                    )?;
+                    continue;
+                }
                 if let Some(rule) = rule {
                     let t = self.task(
                         p,
@@ -1556,6 +1565,260 @@ mod tests {
         assert!(
             error.contains("confirm-orders, which is not installed"),
             "{error}"
+        );
+        Ok(())
+    }
+
+    const X12_ORDERS: &[u8] = include_bytes!("../../../examples/x12/850-5010.edi");
+
+    fn x12_fixture() -> Result<(tempfile::TempDir, Workspace)> {
+        let dir = tempfile::tempdir()?;
+        fs::write(
+            dir.path().join("vendredi.toml"),
+            include_str!("../../../examples/x12/vendredi.toml"),
+        )?;
+        fs::write(
+            dir.path().join("855.edi"),
+            include_bytes!("../../../examples/x12/855.edi"),
+        )?;
+        let w = Workspace::load(dir.path())?;
+        Ok((dir, w))
+    }
+
+    fn sent(e: &mut Engine) -> Vec<(String, String)> {
+        let deliveries = e.take_deliveries();
+        for d in &deliveries {
+            e.finish_delivery(d.id, Ok(String::new())).unwrap();
+        }
+        deliveries
+            .iter()
+            .flat_map(|d| {
+                let parsed = interchange::parse(&d.bytes);
+                assert!(parsed.findings.is_empty(), "{:?}", parsed.findings);
+                parsed
+                    .interchanges
+                    .iter()
+                    .flat_map(|i| i.message_texts().unwrap())
+                    .map(|text| {
+                        (
+                            text[..text.find('*').unwrap_or(text.len())].to_owned(),
+                            text,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn x12_partner_acknowledges_groups_and_replies() -> Result<()> {
+        let (_dir, w) = x12_fixture()?;
+        let clock = Arc::new(Manual(AtomicI64::new(1_767_225_600_000)));
+        let mut e = Engine::open(w.clone(), clock.clone())?;
+        input(&mut e, 0, X12_ORDERS)?;
+        let replies = sent(&mut e);
+        let texts: Vec<_> = replies.iter().map(|(_, t)| t.as_str()).collect();
+        assert_eq!(
+            texts,
+            [
+                "ST*997*0001~AK1*PO*1001*005010~AK2*850*0001~AK5*A~AK2*850*0002~AK5*A~AK9*A*2*2*2~SE*8*0001~",
+                "ST*997*0001~AK1*PO*1002*005010~AK2*850*0003~AK5*A~AK9*A*1*1*1~SE*6*0001~",
+                "ST*855*0001~BAK*00*AC*PO5001*20261125~SE*3*0001~",
+                "ST*855*0001~BAK*00*AC*PO5001*20261125~SE*3*0001~",
+                "ST*855*0001~BAK*00*AC*PO5001*20261125~SE*3*0001~",
+            ]
+        );
+        let rows = e.traffic("855")?;
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].version, "005010");
+        let inbound = e.traffic("in")?.pop().unwrap();
+        assert_eq!(
+            (inbound.kind.as_str(), inbound.reference.as_str()),
+            ("850, 850, 850", "000004711")
+        );
+
+        // One flawed transaction set is rejected in the 997 and skipped.
+        let partial = std::str::from_utf8(X12_ORDERS)?.replacen("SE*9*0002", "SE*8*0002", 1);
+        input(&mut e, 0, partial.as_bytes())?;
+        let replies = sent(&mut e);
+        assert!(
+            replies[0].1.contains("AK2*850*0002~AK5*R*4~AK9*P*2*2*1~"),
+            "{}",
+            replies[0].1
+        );
+        assert_eq!(replies.len(), 4, "a 997 per group and two 855s");
+        assert!(
+            e.take_events()
+                .iter()
+                .any(|v| v["event"] == "rejected_message")
+        );
+
+        // An incoming 997 for our 855 marks it acknowledged.
+        let ours = e.traffic("855")?[0].reference.clone();
+        let control: u64 = ours.parse()?;
+        let ack_body = [
+            x12::Segment::simple("AK1", &["PR", &control.to_string(), "005010"]),
+            x12::Segment::simple("AK9", &["A", "1", "1", "1"]),
+        ];
+        let ack = x12::envelope(
+            &x12::Envelope {
+                delimiters: x12::Delimiters::default(),
+                sender: x12::Party {
+                    qualifier: "ZZ",
+                    id: "BUYER",
+                    application: "BUYER",
+                },
+                receiver: x12::Party {
+                    qualifier: "ZZ",
+                    id: "SUPPLIER",
+                    application: "SUPPLIER",
+                },
+                control: 900,
+                group: 900,
+                version: "005010",
+                usage: 'T',
+                ack_requested: false,
+                time: "2026-11-25T10:30:00Z".parse()?,
+                line_ending: b"\n",
+                wrong_count: false,
+            },
+            &[x12::Outgoing {
+                kind: "997",
+                reference: "0001",
+                implementation: None,
+                body: &ack_body,
+            }],
+        )?;
+        input(&mut e, 0, &ack)?;
+        assert!(
+            e.take_deliveries().is_empty(),
+            "acknowledgements are not acknowledged"
+        );
+        assert!(
+            e.take_events()
+                .iter()
+                .any(|v| v["event"] == "acknowledged" && v["status"] == "accepted")
+        );
+        assert_eq!(
+            e.traffic("855")?
+                .iter()
+                .find(|r| r.reference == ours)
+                .unwrap()
+                .status,
+            "Acknowledged"
+        );
+
+        // EDIFACT sent to an X12 partner is recorded and rejected unanswered.
+        let id = input(&mut e, 0, ORDER)?;
+        assert!(e.take_deliveries().is_empty());
+        assert_eq!(e.detail(id)?["findings"][0]["code"], "standard");
+        Ok(())
+    }
+
+    #[test]
+    fn x12_faults_ta1_999_and_scripts() -> Result<()> {
+        let (dir, mut w) = x12_fixture()?;
+        let settings = w.partners[0].x12.as_mut().unwrap();
+        settings.ta1 = true;
+        settings.acknowledgement = GroupAck::ImplementationAck;
+        w.partners[0].rules[0].actions = vec![
+            Action::Fault {
+                fault: Fault::WrongCount,
+            },
+            Action::Document {
+                document: "855.edi".into(),
+            },
+        ];
+        let mut e = Engine::open(w.clone(), Arc::new(SystemClock))?;
+        let one = std::str::from_utf8(X12_ORDERS)?;
+        let first = &one[..one
+            .find("GS*PO*BUYERAPP*SUPPLIERAPP*20261125*1030*1002")
+            .unwrap()];
+        let single = format!("{first}IEA*1*000004711~\r\n");
+        input(&mut e, 0, single.as_bytes())?;
+        let deliveries = e.take_deliveries();
+        let kinds: Vec<_> = deliveries
+            .iter()
+            .map(|d| {
+                let p = x12::parse(&d.bytes);
+                let i = &p.interchanges[0];
+                (
+                    i.ta1
+                        .first()
+                        .map(|s| s.tag.clone())
+                        .or_else(|| Some(i.groups[0].transactions[0].kind().to_owned()))
+                        .unwrap(),
+                    i.findings.iter().map(|f| f.code).collect::<Vec<_>>(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                ("TA1".to_owned(), vec![]),
+                ("999".to_owned(), vec![]),
+                ("855".to_owned(), vec!["ge_count", "iea_count"]),
+                ("855".to_owned(), vec!["ge_count", "iea_count"]),
+            ]
+        );
+        assert!(
+            x12::parse(&deliveries[1].bytes).interchanges[0].groups[0].transactions[0]
+                .segments
+                .iter()
+                .any(|s| s.tag == "IK5")
+        );
+
+        // A rejected interchange gets a rejecting TA1 and 999 and no 855.
+        w.partners[0].rules[0].actions = vec![Action::Fault {
+            fault: Fault::Reject,
+        }];
+        fs::remove_dir_all(dir.path().join(".vendredi"))?;
+        drop(e);
+        let mut e = Engine::open(w.clone(), Arc::new(SystemClock))?;
+        input(&mut e, 0, single.as_bytes())?;
+        let texts: Vec<_> = sent(&mut e).into_iter().map(|(_, t)| t).collect();
+        assert_eq!(texts.len(), 2);
+        assert!(
+            texts[0].starts_with("TA1*000004711*261125*1030*R*022"),
+            "{}",
+            texts[0]
+        );
+        assert!(texts[1].contains("AK9*R*2*2*0"), "{}", texts[1]);
+
+        // Scripts read the X12 view and build structured replies.
+        drop(e);
+        fs::remove_dir_all(dir.path().join(".vendredi"))?;
+        fs::write(
+            dir.path().join("reply.js"),
+            "function reply(i, api) {
+                const g = i.groups[0];
+                const po = g.messages[0];
+                const beg = po.segments.find(s => s[0] === 'BEG');
+                const ref = po.segments.find(s => s[0] === 'REF');
+                api.log(g.functional + ' ' + g.reference + ' ' + JSON.stringify(ref[3]));
+                api.send(api.build('855', g.version, [['BAK', '00', 'AC', beg[3], beg[5]], ['REF', 'DP', ref[2], ref[3]]]));
+            }",
+        )?;
+        let mut w = w;
+        w.partners[0].x12 = Some(Default::default());
+        w.partners[0].acknowledge = Policy::Never;
+        w.partners[0].rules[0].actions = vec![Action::Script {
+            script: "reply.js".into(),
+            function: "reply".into(),
+        }];
+        let mut e = Engine::open(w, Arc::new(SystemClock))?;
+        input(&mut e, 0, single.as_bytes())?;
+        let events = e.take_events();
+        assert!(events.iter().all(|v| v["error"].is_null()), "{events:#?}");
+        assert!(
+            events
+                .iter()
+                .any(|v| v["text"] == "PO 1001 {\"repeat\":[\"Dock\",\"Gate 4\"]}")
+        );
+        let texts: Vec<_> = sent(&mut e).into_iter().map(|(_, t)| t).collect();
+        assert_eq!(
+            texts[0],
+            "ST*855*0001~BAK*00*AC*PO5001*20261125~REF*DP*038*Dock^Gate 4~SE*4*0001~"
         );
         Ok(())
     }
