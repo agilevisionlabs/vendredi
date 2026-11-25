@@ -11,6 +11,8 @@ import shutil
 import socket
 import sqlite3
 import subprocess
+import tarfile
+import zipfile
 import tempfile
 import threading
 import time
@@ -176,6 +178,66 @@ class LocalExchange(unittest.TestCase):
                 self.assertIn(b"FTX+example'", reply)
                 self.assertFalse(reply.endswith(b"'"))
 
+    def test_script_sandbox_recovery_and_persistence(self):
+        self.config = self.config.replace('url = "http://127.0.0.1:8181/replies"', 'directory = "out"')
+        self.config = self.config.replace('{ document = "confirmation.edi" }',
+            '{ fault = "suppress_ack" }, { script = "reply.js", function = "reply" }')
+        good = """function reply(inbound, api) {
+            if (globalThis.previous) throw Error("shared JS global");
+            globalThis.previous = true;
+            const calls = (api.get("calls") || 0) + 1;
+            api.set("calls", calls);
+            api.log((inbound === null ? "command" : "order") + "-" + calls);
+            api.send(api.build("ORDRSP:D:96A:UN", "BGM+231+" + api.nextReference() + "'"));
+        }"""
+        (self.root / "reply.js").write_text(good)
+        app = self.launch()
+        self.assertEqual(self.post(self.order), (202, b""))
+        self.assertEqual(app.wait("script_log")["text"], "order-1")
+        first = app.wait("delivered")["transfer"]
+        self.assertTrue((self.root / "out" / f"vendredi-{first}.edi").read_bytes()
+                        .endswith(b"BGM+231+1'UNT+3+1'UNZ+1+2'"))
+
+        # Stage effects before each failure and check the durable state afterwards.
+        prefix = """function fail(i,a) {
+            a.set("calls", 99); a.nextReference(); a.log("discard");
+            a.send(a.build("ORDRSP:D:96A:UN", "BGM+discard'"));
+        """
+        cases = [
+            ("syntax", "function fail( {", "SyntaxError"),
+            ("file", prefix + "require('fs'); }", "ReferenceError"),
+            ("fuel", prefix + "for(let i=0;i<99000;i++) Math.sin(i); }", "fuel"),
+            ("memory", prefix + "new ArrayBuffer(40 * 1024 * 1024); }", "memory"),
+            ("logs", prefix + "for(let i=0;i<130;i++) a.log(i); }", "too many"),
+            ("source", " " * 65537, "source exceeds"),
+        ]
+        for name, source, expected in cases:
+            with self.subTest(name=name):
+                (self.root / "fail.js").write_text(source)
+                app.command("send", "Supplier", "fail.js", "fail")
+                error = app.wait("action")["error"]
+                self.assertIn(expected.lower(), error.lower())
+                self.assertLess(len(error), 2048)
+
+        app.command("send", "Supplier", "reply.js", "reply")
+        self.assertEqual(app.wait("script_log")["text"], "command-2")
+        second = app.wait("delivered")["transfer"]
+        self.assertTrue((self.root / "out" / f"vendredi-{second}.edi").read_bytes()
+                        .endswith(b"BGM+231+3'UNT+3+1'UNZ+1+4'"))
+        app.close()
+        app = self.launch()
+        app.command("send", "Supplier", "reply.js", "reply")
+        self.assertEqual(app.wait("script_log")["text"], "command-3")
+        app.wait("delivered")
+        app.close()
+        with contextlib.closing(sqlite3.connect(self.db)) as db:
+            reference, state = db.execute("SELECT reference,data FROM partner_state").fetchone()
+            self.assertEqual((reference, json.loads(state)), (6, {"calls": 3}))
+            self.assertEqual(db.execute("SELECT count(*) FROM transfers WHERE direction='out'").fetchone(), (3,))
+            logs = [json.loads(row[0])["text"] for row in db.execute(
+                "SELECT body FROM events WHERE json_extract(body,'$.event')='script_log' ORDER BY id")]
+            self.assertEqual(logs, ["order-1", "command-2", "command-3"])
+
     def test_envelope_faults_and_duplicate_delivery(self):
         self.config = self.config.replace('url = "http://127.0.0.1:8181/replies"', 'directory = "out"')
         actions = '{ fault = "duplicate_reference" }, { fault = "wrong_count" }, { fault = "duplicate" }, { document = "confirmation.edi" }'
@@ -237,7 +299,22 @@ class LocalExchange(unittest.TestCase):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--binary", type=Path, default=BINARY)
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--binary", type=Path, default=BINARY)
+    source.add_argument("--archive", type=Path, help="test the executable extracted from a release archive")
     args = parser.parse_args()
     BINARY = args.binary.resolve()
-    unittest.main(argv=["local_instance"], verbosity=2)
+    with tempfile.TemporaryDirectory() as tmp:
+        if args.archive:
+            if args.archive.suffix == ".zip":
+                BINARY = Path(tmp) / "vendredi.exe"
+                with zipfile.ZipFile(args.archive) as package:
+                    BINARY.write_bytes(package.read(BINARY.name))
+            else:
+                BINARY = Path(tmp) / "vendredi"
+                with tarfile.open(args.archive) as package:
+                    names = {"vendredi", "Vendredi.app/Contents/MacOS/vendredi"}
+                    member, = [m for m in package.getmembers() if m.isfile() and m.name in names]
+                    BINARY.write_bytes(package.extractfile(member).read())
+                BINARY.chmod(0o755)
+        unittest.main(argv=["local_instance"], verbosity=2)

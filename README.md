@@ -48,11 +48,12 @@ function confirm(interchange, api) {
 }
 ```
 
-Scripts can also call `api.contrl()`, `api.nextReference()` and `api.now()` (Unix milliseconds). Script evaluation runs with loop, recursion and total instruction limits. Static documents contain a single `UNH` through `UNT` message using the default separators. The engine applies the partner’s separators and identities on delivery.
+Scripts can also call `api.contrl()`, `api.nextReference()` and `api.now()` (Unix milliseconds). Every script runs in a fresh Wasmtime sandbox with 32 MiB of guest memory and an instruction budget. Scripts have no direct filesystem or network access. They can read the inbound interchange, update partner state and request delivery through the configured partner channel. Static documents contain a single `UNH` through `UNT` message using the default separators. The engine applies the partner’s separators and identities on delivery.
 
 ## Build and test
 
 ```sh
+rustup target add wasm32-wasip1
 cargo build --release --locked
 cargo test --workspace --locked
 cargo test --locked -p vendredi exchange_edit_and_reopen -- --ignored
@@ -92,5 +93,5 @@ The last two commands bind loopback listeners and use temporary workspaces. On W
 
 - **Rust**, with **egui** for the UI.
 - The simulator core is a library with no UI dependency. The GUI and the headless mode are thin shells over it, shipped in one binary.
-- Scenarios are declarative: rules match inbound messages and list the actions to take. Logic that goes beyond matching, such as building a reply from the inbound message, is JavaScript run by an embedded **Boa** engine.
+- Scenarios are declarative: rules match inbound messages and list the actions to take. Logic that goes beyond matching, such as building a reply from the inbound message, is JavaScript run by **Boa** inside an embedded Wasmtime sandbox.
 - Transports sit behind a common interface so AS2, FTPS and SFTP can be added without touching the core.

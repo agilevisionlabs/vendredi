@@ -47,11 +47,11 @@ Rules hold only simple matches. Any condition or computation beyond that belongs
 
 ### Script host
 
-Scripts are JavaScript, run by an embedded Boa engine.
+Vendredi builds Boa for WASI and precompiles it to portable 64-bit Pulley bytecode with Wasmtime. The native executable embeds this artifact. On first use the host loads it once, then creates a fresh fuel- and memory-limited store for each validation or invocation. GUI syntax checks use the same guest as the scenario engine.
 
 - A script receives the parsed inbound interchange and a small host API: build and send messages, generate `CONTRL`, get the next control reference, read the current time, log.
 - A script has no file or network access.
-- The JS context is owned by the engine thread.
+- The guest returns a bounded result. The engine validates its messages and effects before applying partner state or initiating delivery.
 - Delays are handled by the engine, not by the script sleeping.
 
 ### Event log
@@ -151,6 +151,4 @@ These were proposed but not yet confirmed.
 
 ## To verify when choosing dependencies
 
-- Whether Boa, with its Unicode data, fits the 30 MB binary target alongside egui.
-- Whether Boa's runtime limits are enough to stop a script that hangs.
 - Whether Turso, which is still pre-1.0, is stable enough for our use. The storage interface in `core` keeps a fallback to SQLite itself cheap, since the file format is the same.

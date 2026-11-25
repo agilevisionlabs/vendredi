@@ -44,6 +44,38 @@ Open egui when the binary receives no arguments. Provide a ready-to-run sample p
 
 Run the HTTP and folder exchange, fault, restart and GUI smoke checks on Windows and macOS (Intel and Apple Silicon). Build and launch on Linux. Distribute one self-contained executable per platform and architecture. Verify first launch and the bundled sample on a clean machine offline. Capture release binary size, time from launch to ready, resident memory and idle CPU over a fixed observation window for GUI and headless runs. Compare against the initial goals of under 30 MB on disk, under one second to start, under 100 MB RAM and near-zero idle CPU. Record the platform, workload and any missed target so the measurements can be repeated.
 
+## 7. Isolate scenario JavaScript with Wasmtime
+
+Vendredi now runs both syntax validation and script execution in the Wasm guest. The Apple Silicon release build passed the workspace tests and the packaged local exchange suite, including failure recovery and partner-state persistence.
+
+In one local headless comparison with v0.1.1, the median warm script command through delivery took 17.3 ms with Wasmtime and 6.7 ms with native Boa. Sampled peak RSS was 42.4 MB and 23.9 MB respectively. The release executables were 22.9 MB and 24.3 MB. The native CI matrix runs the same profile on each platform.
+
+**Original migration plan.** Compile the pinned Boa interpreter and Vendredi’s JS wrapper into one bundled Wasm guest. Embed Wasmtime in the app. Existing workspaces continue to supply JavaScript source and a function name. The isolation boundary covers that code, including parsing it in the editor. Workspace configuration still controls host-side operations such as which script file to open and where to deliver messages.
+
+### Prove the guest builds and runs
+
+1. Build a small Rust guest against the locked Boa 0.21.1 with the current feature set. Try `wasm32-wasip1` first. Run the existing scripted `ORDRSP` case from `crates/core/src/engine.rs` through an embedded Wasmtime host, using the fixture’s clock and partner state. Compare the reply bytes, logs and resulting state with native execution. This build and comparison are the first feasibility gate. [Boa’s Wasm target notes](https://github.com/boa-dev/boa#-web-assembly)
+2. Inspect the compiled module’s actual imports and check them against an explicit allowlist in CI. Configure Boa’s idle module loader. Offer only the WASI functions the guest needs, with no preopened directories, sockets, inherited environment or inherited standard streams. Keep database access, delivery and logging on the Rust side. A new or unsupported import should fail the build check or instantiation.
+3. Build the guest from locked source before the native tests and release build, and embed the resulting bytes in the executable. Use the same build step locally and in the native CI matrix. Lazily compile the bundled module once per process and reuse it across the GUI and engine. Instantiate a fresh store and instance per validation or execution. Only Vendredi’s build supplies the module.
+
+### Move the two script entry points
+
+- Keep the Rust signatures of `script::validate` and `script::run`. Move function-name checks, wrapper construction, parsing and evaluation into the guest. Validation parses without invoking the function. Preserve the JS API, including the injected `api.now()`, partner state, reference allocation and the null interchange for a partner-initiated send. Exercise the script editor, rule editor and GUI send dialog as well as inbound rules and headless sends.
+- Use a small versioned request and response over guest linear memory. The request carries the operation, source, function name and input. The response carries validation success, the existing `Effects` fields or a bounded diagnostic. Check pointer ranges and byte lengths before copying from the guest. A guest trap, invalid response or exhausted budget fails the action through the existing error path. Discard the instance and its pending effects.
+- Bound script reads in workspace loading, editor flows and engine dispatch before allocating the whole file. Bound serialized input, returned bytes, send and log counts, and state size on the host. Validate the entire response, including reference progression, acknowledgement eligibility and EDI messages, before updating partner state or queuing any script replies. Preserve the existing configured send channel and action order.
+
+### Set budgets and verify recovery
+
+Install a Wasmtime store limiter for linear memory and tables, and set fuel before instantiation so parsing, evaluation and result encoding all consume the invocation budget. Retain Boa’s loop and recursion limits during migration. If a wall-clock deadline is needed, test epoch interruption with a host timer independent of the engine thread. Fuel measures guest work. Host allocations, input reads and processing returned effects need their own bounds. Size the budgets using the largest supported fixture and record the chosen values and measured headroom before rollout. [Wasmtime interruption](https://docs.wasmtime.dev/examples-interrupting-wasm.html) · [Wasmtime resource limits](https://docs.wasmtime.dev/api/wasmtime/trait.ResourceLimiter.html)
+
+| Acceptance check | Evidence required for adoption |
+|---|---|
+| Compatibility | Run the existing core, GUI and local-instance suites. Compare scripted inbound and partner-initiated runs under a fixed clock, including reply bytes, references, logs and persisted partner state after restart. |
+| Containment and recovery | Exercise syntax failure, denied file access, fuel exhaustion, memory exhaustion and oversized effects. Verify a bounded error, zero script-originated sends or state changes on failure, and a successful subsequent script in the same Vendredi process. Verify separate invocations cannot observe each other’s JS globals. |
+| Distribution and cost | Build and run the packaged binary offline on the existing Windows, macOS and Linux CI matrix. Compare native and sandboxed builds for executable size, cold launch, first script, repeated script latency, peak and idle resident memory, and idle CPU. Use milestone 6 targets and report regressions alongside the existing arm64 desktop memory overage. |
+
+Switch the production dependency from native Boa to Wasmtime after these gates pass and any release-target exceptions are explicitly accepted. Verify the native binary’s Cargo dependency graph excludes Boa and all script entry points use the guest. If the guest fails to initialize at runtime, report the script error through the requesting GUI or engine path. A fallback to native execution would bypass isolation.
+
 ## Decisions to settle during implementation
 
 | Decision | Planning assumption and when it matters |
