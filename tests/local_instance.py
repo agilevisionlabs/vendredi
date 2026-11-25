@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BINARY = ROOT / "target/debug/vendredi"
 SAMPLE = ROOT / "examples/orders"
 CASES = ROOT / "examples/cases"
+X12 = ROOT / "examples/x12"
 
 
 def port():
@@ -431,6 +432,104 @@ class LocalExchange(unittest.TestCase):
         self.assertIn("FAIL  send-invoice — initiate Invoice", result.stdout)
         self.assertIn("ok    send-invoice — sample Order", result.stdout)
         self.assertIn("reply 1 (expected.edi) differs at byte 73", result.stdout)
+
+    def x12_workspace(self, actions=None, send='directory = "out"'):
+        shutil.copy(X12 / "855.edi", self.root)
+        config = (X12 / "vendredi.toml").read_text().replace(":8180", f":{self.listener}")
+        config = config.replace('url = "http://127.0.0.1:8181/replies"', send)
+        if actions:
+            config = config.replace('actions = [{ document = "855.edi" }]', f"actions = [{actions}]")
+        self.config = config
+        return (X12 / "850-5010.edi").read_bytes()
+
+    def x12_replies(self):
+        replies = {}
+        for path in sorted((self.root / "out").glob("*.edi"), key=lambda p: int(p.stem.split("-")[1])):
+            data = path.read_bytes()
+            kind = data[data.find(b"ST*") + 3:data.find(b"ST*") + 6] if b"ST*" in data else b"TA1"
+            replies.setdefault(kind.decode(), []).append(data)
+        return replies
+
+    def post_x12(self, data, path="/supplier/850"):
+        conn = http.client.HTTPConnection("127.0.0.1", self.listener, timeout=5)
+        try:
+            conn.request("POST", path, data, {"Content-Type": "application/edi-x12"})
+            r = conn.getresponse()
+            return r.status, r.read()
+        finally:
+            conn.close()
+
+    def test_x12_exchange_over_http_and_folders(self):
+        replies = queue.Queue()
+        class Partner(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                replies.put(self.rfile.read(int(self.headers["Content-Length"])))
+                self.send_response(204)
+                self.end_headers()
+            def log_message(self, *args):
+                pass
+        with http.server.ThreadingHTTPServer(("127.0.0.1", 0), Partner) as server:
+            orders = self.x12_workspace(send=f'url = "http://127.0.0.1:{server.server_port}/replies"')
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                app = self.launch()
+                self.assertEqual(self.post_x12(orders), (202, b""))
+                received = sorted(replies.get(timeout=5) for _ in range(5))
+                for _ in range(5):
+                    app.wait("delivered")
+                app.close()
+            finally:
+                server.shutdown()
+                thread.join()
+        acks = [r for r in received if b"ST*997*" in r]
+        self.assertEqual(len(acks), 2)
+        self.assertTrue(any(b"AK1*PO*1001*005010~" in a and b"AK9*A*2*2*2~" in a for a in acks))
+        self.assertEqual(sum(b"ST*855*0001~BAK*00*AC*PO5001*20261125~SE*3*0001~" in r for r in received), 3)
+        self.assertTrue(all(r.startswith(b"ISA*00*          *00*          *ZZ*SUPPLIER       *ZZ*BUYER") for r in received))
+
+        # The same exchange through watched folders, then an incoming 997.
+        self.config = self.config.replace(f'url = "http://127.0.0.1:{server.server_port}/replies"', 'directory = "out"')
+        app = self.launch()
+        partial = self.root / "x12.part"
+        partial.write_bytes(orders)
+        os.replace(partial, self.root / "inbox" / "orders.x12")
+        delivered = [app.wait("delivered")["transfer"] for _ in range(5)]
+        files = self.x12_replies()
+        self.assertEqual((len(files["997"]), len(files["855"])), (2, 3))
+        reply = files["855"][0]
+        control = int(reply[90:99])
+        ack = ("ISA*00*          *00*          *ZZ*BUYER          *ZZ*SUPPLIER       *261125*1100*^*00501*000000900*0*T*:~"
+               f"GS*FA*BUYER*SUPPLIER*20261125*1100*900*X*005010~ST*997*0001~AK1*PR*{control}*005010~"
+               "AK9*A*1*1*1~SE*4*0001~GE*1*900~IEA*1*000000900~").encode()
+        self.assertEqual(self.post_x12(ack), (202, b""))
+        self.assertEqual(app.wait("acknowledged")["status"], "accepted")
+        app.close()
+        self.assertEqual(len(self.x12_replies()["997"]), 2, "a 997 is not acknowledged")
+
+    def test_x12_faults(self):
+        expectations = {
+            "reject": lambda r, status: (self.assertIn(b"AK9*R*2*2*0~", r["997"][0]), self.assertNotIn("855", r)),
+            "suppress_ack": lambda r, status: self.assertEqual(sorted(r), ["855"]),
+            "wrong_count": lambda r, status: self.assertTrue(r["855"][0].endswith(b"GE*0*3~IEA*0*000000003~")),
+            "duplicate_reference": lambda r, status: self.assertEqual(r["855"][0][90:99], r["997"][1][90:99]),
+            "duplicate": lambda r, status: self.assertEqual(len(r["855"]), 6),
+            "malformed": lambda r, status: self.assertFalse(r["855"][0].endswith(b"~")),
+            "http500": lambda r, status: self.assertEqual(status, 500),
+            "slow_response": lambda r, status: self.assertEqual(status, 202),
+        }
+        for fault, check in expectations.items():
+            with self.subTest(fault=fault):
+                shutil.rmtree(self.root / "out", ignore_errors=True)
+                shutil.rmtree(self.root / ".vendredi", ignore_errors=True)
+                orders = self.x12_workspace(f'{{ fault = "{fault}" }}, {{ document = "855.edi" }}')
+                app = self.launch()
+                status = self.post_x12(orders)[0]
+                expected = {"reject": 2, "suppress_ack": 3, "duplicate": 8}.get(fault, 5)
+                for _ in range(expected):
+                    app.wait("delivered")
+                app.close()
+                check(self.x12_replies(), status)
 
     def test_envelope_faults_and_duplicate_delivery(self):
         self.config = self.config.replace('url = "http://127.0.0.1:8181/replies"', 'directory = "out"')
