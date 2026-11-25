@@ -25,6 +25,9 @@ pub enum Command {
     ClearHistory(HistoryPeriod, Option<String>),
     Listen(bool),
     Replay(i64),
+    UseCase(String, String),
+    Sample(String, String),
+    Initiate(String, String),
     Stop,
 }
 pub type Output = Arc<dyn Fn(Value) + Send + Sync>;
@@ -127,6 +130,9 @@ pub fn start(w: Workspace, out: Output, with_history: bool, listen: bool) -> Res
                 Some(Command::Send(p, path, f)) => e.initiate(&p, &path, f.as_deref()),
                 Some(Command::Resend(id)) => e.resend(id),
                 Some(Command::Replay(id)) => e.replay(id),
+                Some(Command::UseCase(p, id)) => e.use_case(&p, &id),
+                Some(Command::Sample(p, name)) => e.sample(&p, &name).map(|_| ()),
+                Some(Command::Initiate(p, name)) => e.initiate_case(&p, &name),
                 Some(Command::Traffic(search)) => e
                     .traffic(&search)
                     .map(|rows| out(json!({"event":"traffic","search":search,"rows":rows}))),

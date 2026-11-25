@@ -1,3 +1,4 @@
+mod cases;
 mod gui;
 mod runtime;
 
@@ -11,17 +12,42 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
 };
-use vendredi_core::config::Workspace;
+use vendredi_core::{case, config::Workspace};
 
 const CONFIG: &str = include_str!("../../../examples/orders/vendredi.toml");
 const ORDER: &[u8] = include_bytes!("../../../examples/orders/order.edi");
 const CONFIRMATION: &[u8] = include_bytes!("../../../examples/orders/confirmation.edi");
+/// The starter case library, installed and attached to the sample partner.
+const CASES: &[&str] = &[
+    include_str!("../../../examples/cases/confirm-orders.json"),
+    include_str!("../../../examples/cases/reject-orders.json"),
+    include_str!("../../../examples/cases/missing-acknowledgement.json"),
+    include_str!("../../../examples/cases/delayed-confirmation.json"),
+    include_str!("../../../examples/cases/failing-http.json"),
+    include_str!("../../../examples/cases/slow-http.json"),
+    include_str!("../../../examples/cases/duplicate-reference.json"),
+    include_str!("../../../examples/cases/duplicate-delivery.json"),
+    include_str!("../../../examples/cases/malformed-reply.json"),
+    include_str!("../../../examples/cases/wrong-count.json"),
+    include_str!("../../../examples/cases/send-invoice.json"),
+];
 
 fn sample(root: &Path) -> Result<()> {
     std::fs::create_dir_all(root)?;
+    let mut ids = Vec::new();
+    for json in CASES {
+        let bundle = case::Bundle::resolve(case::Case::parse(json.as_bytes())?, |p| {
+            bail!("{} is not embedded", p.display())
+        })?;
+        let dir = root.join(case::DIRECTORY).join(&bundle.case.id);
+        if !dir.exists() {
+            bundle.write(&dir)?;
+        }
+        ids.push(format!("{:?}", bundle.case.id));
+    }
     let config = CONFIG.replace(
-        "url = \"http://127.0.0.1:8181/replies\"",
-        "directory = \"replies\"",
+        "url = \"http://127.0.0.1:8181/replies\" }",
+        &format!("directory = \"replies\" }}\ncases = [{}]", ids.join(", ")),
     );
     for (name, data) in [
         ("vendredi.toml", config.as_bytes()),
@@ -49,7 +75,12 @@ fn command(args: &[String]) -> Result<Command> {
         }
         [cmd, id] if cmd == "resend" => Ok(Command::Resend(id.parse()?)),
         [cmd, id] if cmd == "inspect" => Ok(Command::Inspect(id.parse()?)),
-        _ => bail!("expected send PARTNER FILE [FUNCTION], resend ID or inspect ID"),
+        [cmd, p, id] if cmd == "case" => Ok(Command::UseCase(p.clone(), id.clone())),
+        [cmd, p, name] if cmd == "sample" => Ok(Command::Sample(p.clone(), name.clone())),
+        [cmd, p, name] if cmd == "initiate" => Ok(Command::Initiate(p.clone(), name.clone())),
+        _ => bail!(
+            "expected send PARTNER FILE [FUNCTION], resend ID, inspect ID, case PARTNER CASE, sample PARTNER SAMPLE or initiate PARTNER NAME"
+        ),
     }
 }
 fn main() -> Result<()> {
@@ -96,30 +127,44 @@ fn main() -> Result<()> {
             });
             runner.wait()
         }
-        [cmd, dir, rest @ ..] if matches!(cmd.as_str(), "send" | "resend" | "inspect") => {
-            let w = Workspace::load(Path::new(dir))?;
-            let failed = Arc::new(AtomicBool::new(false));
-            let f = failed.clone();
-            let mut runner = runtime::start(
-                w,
-                Arc::new(move |v| {
-                    if v["event"] == "error" || v["event"] == "failed" || v["error"].is_string() {
-                        f.store(true, Ordering::SeqCst);
-                    }
-                    println!("{v}");
-                }),
-                false,
-                false,
-            )?;
+        [cmd, sub, dir] if cmd == "case" && sub == "list" => cases::list(Path::new(dir)),
+        [cmd, sub, dir, partner, id] if cmd == "case" && sub == "use" => {
+            offline(dir, vec!["case".into(), partner.clone(), id.clone()])
+        }
+        [cmd, dir, rest @ ..]
+            if matches!(
+                cmd.as_str(),
+                "send" | "resend" | "inspect" | "sample" | "initiate"
+            ) =>
+        {
             let mut words = vec![cmd.clone()];
             words.extend_from_slice(rest);
-            runner.tx.send(command(&words)?)?;
-            runner.stop()?;
-            anyhow::ensure!(!failed.load(Ordering::SeqCst), "command failed");
-            Ok(())
+            offline(dir, words)
         }
         _ => bail!(
-            "usage: vendredi [gui WORKSPACE | init WORKSPACE | run --headless WORKSPACE | send WORKSPACE PARTNER FILE [FUNCTION] | resend WORKSPACE ID | inspect WORKSPACE ID]"
+            "usage: vendredi [gui WORKSPACE | init WORKSPACE | run --headless WORKSPACE | send WORKSPACE PARTNER FILE [FUNCTION] | resend WORKSPACE ID | inspect WORKSPACE ID | sample WORKSPACE PARTNER SAMPLE | initiate WORKSPACE PARTNER NAME | case list WORKSPACE | case use WORKSPACE PARTNER CASE]"
         ),
     }
+}
+
+/// Runs one command against a workspace that no other engine has open.
+fn offline(dir: &str, words: Vec<String>) -> Result<()> {
+    let w = Workspace::load(Path::new(dir))?;
+    let failed = Arc::new(AtomicBool::new(false));
+    let f = failed.clone();
+    let mut runner = runtime::start(
+        w,
+        Arc::new(move |v| {
+            if v["event"] == "error" || v["event"] == "failed" || v["error"].is_string() {
+                f.store(true, Ordering::SeqCst);
+            }
+            println!("{v}");
+        }),
+        false,
+        false,
+    )?;
+    runner.tx.send(command(&words)?)?;
+    runner.stop()?;
+    anyhow::ensure!(!failed.load(Ordering::SeqCst), "command failed");
+    Ok(())
 }
