@@ -1,0 +1,48 @@
+{
+  "vendredi_case": 1,
+  "id": "wrong-count",
+  "name": "Miscount the interchange",
+  "description": "Sends an ORDRSP interchange whose UNZ count does not match its messages.",
+  "standard": "edifact",
+  "tags": [
+    "orders",
+    "fault",
+    "envelope"
+  ],
+  "acknowledge": "always",
+  "rules": [
+    {
+      "name": "Orders",
+      "message": "ORDERS",
+      "version": "D96A",
+      "actions": [
+        {
+          "fault": "wrong_count"
+        },
+        {
+          "document": "ordrsp.edi"
+        }
+      ]
+    }
+  ],
+  "samples": [
+    {
+      "name": "Order",
+      "document": "order.edi"
+    }
+  ],
+  "expect": [
+    {
+      "sample": "Order",
+      "replies": [
+        "ack.edi",
+        "ordrsp.edi"
+      ]
+    }
+  ],
+  "files": {
+    "order.edi": "UNH+1+ORDERS:D:96A:UN'BGM+220+PO1001+9'DTM+137:20261125:102'NAD+BY+5412345000013::9'LIN+1++4000862141404:SRS'QTY+21:48'UNT+7+1'",
+    "ack.edi": "UNH+1+CONTRL:D:96A:UN'UCI+S1+BUYER:ZZ+PARTNER:ZZ+7'UNT+3+1'",
+    "ordrsp.edi": "UNH+1+ORDRSP:D:96A:UN'BGM+231+PO1001+29'UNT+3+1'"
+  }
+}

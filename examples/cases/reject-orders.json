@@ -1,0 +1,43 @@
+{
+  "vendredi_case": 1,
+  "id": "reject-orders",
+  "name": "Reject every order",
+  "description": "Answers each ORDERS with a negative CONTRL and sends no business reply.",
+  "standard": "edifact",
+  "tags": [
+    "orders",
+    "fault",
+    "reject"
+  ],
+  "acknowledge": "always",
+  "rules": [
+    {
+      "name": "Orders",
+      "message": "ORDERS",
+      "version": "D96A",
+      "actions": [
+        {
+          "fault": "reject"
+        }
+      ]
+    }
+  ],
+  "samples": [
+    {
+      "name": "Order",
+      "document": "order.edi"
+    }
+  ],
+  "expect": [
+    {
+      "sample": "Order",
+      "replies": [
+        "nack.edi"
+      ]
+    }
+  ],
+  "files": {
+    "order.edi": "UNH+1+ORDERS:D:96A:UN'BGM+220+PO1001+9'DTM+137:20261125:102'NAD+BY+5412345000013::9'LIN+1++4000862141404:SRS'QTY+21:48'UNT+7+1'",
+    "nack.edi": "UNH+1+CONTRL:D:96A:UN'UCI+S1+BUYER:ZZ+PARTNER:ZZ+4'UNT+3+1'"
+  }
+}

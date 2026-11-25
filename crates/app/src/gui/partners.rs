@@ -26,6 +26,9 @@ impl PartnerForm {
                 acknowledge: Policy::Always,
                 separators: None,
                 rules: vec![],
+                cases: vec![],
+                case: None,
+                active: None,
                 receive: vec![Receive::Folder {
                     directory: format!("inbox-{n}").into(),
                     suffix: ".edi".into(),

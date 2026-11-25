@@ -1,4 +1,7 @@
-use crate::edi::{self, Syntax};
+use crate::{
+    case::{self, Case},
+    edi::{self, Syntax},
+};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -17,6 +20,9 @@ pub struct Workspace {
     pub partners: Vec<Partner>,
     #[serde(skip)]
     pub root: PathBuf,
+    /// Every case installed under `cases/`, loaded and validated.
+    #[serde(skip)]
+    pub cases: Vec<Case>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -31,10 +37,88 @@ pub struct Partner {
     pub send: SendChannel,
     #[serde(default)]
     pub separators: Option<String>,
+    /// The partner's own rules, which form its default case.
     #[serde(default)]
     pub rules: Vec<Rule>,
+    /// Installed cases attached to this partner.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cases: Vec<String>,
+    /// The active case. Absent or `default` selects the partner's own rules.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub case: Option<String>,
+    /// The active case's rules and settings, resolved when the workspace loads.
+    #[serde(skip)]
+    pub active: Option<Active>,
+}
+/// A case as it runs for one partner. Rule file paths are relative to the
+/// workspace root.
+#[derive(Clone, Debug)]
+pub struct Active {
+    pub id: String,
+    pub rules: Vec<Rule>,
+    pub acknowledge: Option<Policy>,
+    pub initiate: Vec<case::Initiate>,
 }
 impl Partner {
+    /// The rules of the active case, or the partner's own rules.
+    pub fn scenario(&self) -> &[Rule] {
+        self.active.as_ref().map_or(&self.rules, |a| &a.rules)
+    }
+    pub fn policy(&self) -> Policy {
+        self.active
+            .as_ref()
+            .and_then(|a| a.acknowledge)
+            .unwrap_or(self.acknowledge)
+    }
+    /// The id of the active case, `default` for the partner's own rules.
+    pub fn case_id(&self) -> &str {
+        self.active.as_ref().map_or(case::DEFAULT, |a| &a.id)
+    }
+    /// Selects a case from the workspace library, or the default case.
+    pub fn activate(&mut self, cases: &[Case], id: &str) -> Result<()> {
+        if id == case::DEFAULT {
+            self.active = None;
+            self.case = None;
+            return Ok(());
+        }
+        let c = cases
+            .iter()
+            .find(|c| c.id == id)
+            .with_context(|| format!("case {id} is not installed in this workspace"))?;
+        ensure!(
+            c.standard == self.standard,
+            "case {id} is written for {} but partner {} uses {}",
+            c.standard.label(),
+            self.name,
+            self.standard.label()
+        );
+        let folder = Path::new(case::DIRECTORY).join(id);
+        let mut rules = c.rules.clone();
+        let mut initiate = c.initiate.clone();
+        for action in rules
+            .iter_mut()
+            .flat_map(|r| &mut r.actions)
+            .chain(initiate.iter_mut().flat_map(|i| &mut i.actions))
+        {
+            match action {
+                Action::Document { document: path } | Action::Script { script: path, .. } => {
+                    *path = folder.join(&*path);
+                }
+                _ => {}
+            }
+        }
+        self.active = Some(Active {
+            id: id.into(),
+            rules,
+            acknowledge: c.acknowledge,
+            initiate,
+        });
+        self.case = Some(id.into());
+        if !self.cases.iter().any(|c| c == id) {
+            self.cases.push(id.into());
+        }
+        Ok(())
+    }
     pub fn syntax(&self) -> Result<Syntax> {
         let Some(s) = &self.separators else {
             return Ok(Syntax::default());
@@ -165,6 +249,27 @@ impl Workspace {
                 .with_context(|| path.display().to_string())?;
         w.root = dir.canonicalize()?;
         w.validate().with_context(|| path.display().to_string())?;
+        w.cases = case::library(&w.root)?;
+        let cases = std::mem::take(&mut w.cases);
+        for p in &mut w.partners {
+            for id in &p.cases {
+                ensure!(
+                    cases.iter().any(|c| c.id == *id),
+                    "{}: partner {} attaches case {id}, which is not installed under {}/",
+                    path.display(),
+                    p.name,
+                    case::DIRECTORY
+                );
+            }
+            if let Some(id) = p.case.clone() {
+                p.activate(&cases, &id)
+                    .with_context(|| path.display().to_string())?;
+                if id != case::DEFAULT {
+                    case::Bundle::load(&w.root.join(case::DIRECTORY).join(&id))?;
+                }
+            }
+        }
+        w.cases = cases;
         Ok(w)
     }
     fn validate(&self) -> Result<()> {
@@ -245,6 +350,50 @@ impl Workspace {
         );
         Ok(())
     }
+}
+/// Records a partner's active case in `vendredi.toml`, keeping the rest of the
+/// file as written. The default case removes the setting.
+pub fn persist_case(root: &Path, partner: &str, id: &str) -> Result<()> {
+    use toml_edit::{Array, DocumentMut, value};
+    let path = root.join("vendredi.toml");
+    let mut doc: DocumentMut = fs::read_to_string(&path)?.parse()?;
+    let partners = doc
+        .get_mut("partners")
+        .and_then(|p| p.as_array_of_tables_mut())
+        .context("expected [[partners]] tables")?;
+    let table = partners
+        .iter_mut()
+        .find(|t| t.get("name").and_then(|n| n.as_str()) == Some(partner))
+        .with_context(|| format!("partner {partner} is not in vendredi.toml"))?;
+    if id == case::DEFAULT {
+        table.remove("case");
+    } else {
+        let attached = table
+            .entry("cases")
+            .or_insert_with(|| value(Array::new()))
+            .as_array_mut()
+            .context("expected cases to be a list")?;
+        if !attached.iter().any(|v| v.as_str() == Some(id)) {
+            attached.push(id);
+        }
+        table.insert("case", value(id));
+    }
+    let mut file = tempfile_in(root)?;
+    std::io::Write::write_all(&mut file.0, doc.to_string().as_bytes())?;
+    file.0.sync_all()?;
+    fs::rename(&file.1, &path)?;
+    Ok(())
+}
+fn tempfile_in(root: &Path) -> Result<(fs::File, PathBuf)> {
+    for n in 0..100u32 {
+        let path = root.join(format!(".vendredi.toml.{}.{n}", std::process::id()));
+        match fs::File::options().write(true).create_new(true).open(&path) {
+            Ok(f) => return Ok((f, path)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.into()),
+        }
+    }
+    anyhow::bail!("could not create a temporary configuration file")
 }
 fn channel_directory(root: &Path, path: &Path) -> Result<PathBuf> {
     let dir = root.join(path);

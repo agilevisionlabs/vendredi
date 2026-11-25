@@ -1,3 +1,4 @@
+pub mod case;
 pub mod config;
 pub mod contract;
 pub mod edi;

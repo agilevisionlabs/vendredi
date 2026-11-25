@@ -425,7 +425,7 @@ impl Engine {
     pub fn receipt(&self, p: usize, parsed: &edi::Parsed) -> Receipt {
         for m in parsed.interchanges.iter().flat_map(|i| &i.messages) {
             if let Some(rule) = self.workspace.partners[p]
-                .rules
+                .scenario()
                 .iter()
                 .find(|r| r.matches(m))
             {
@@ -485,10 +485,11 @@ impl Engine {
                 name,
             ),
         )?;
+        let case = self.workspace.partners[p].case_id().to_owned();
         self.event(
             "execution",
             root,
-            json!({"execution":execution,"name":name,"interchange":trigger.0,"message":trigger.1}),
+            json!({"execution":execution,"name":name,"case":case,"interchange":trigger.0,"message":trigger.1}),
         )?;
         Ok(Task {
             execution,
@@ -523,7 +524,7 @@ impl Engine {
             let rules: Vec<_> = i
                 .messages
                 .iter()
-                .map(|m| partner.rules.iter().find(|r| r.matches(m)).cloned())
+                .map(|m| partner.scenario().iter().find(|r| r.matches(m)).cloned())
                 .collect();
             let faults: Vec<Fault> = rules
                 .iter()
@@ -537,8 +538,8 @@ impl Engine {
                     }
                 })
                 .collect();
-            let ack = partner.acknowledge == Policy::Always
-                || (partner.acknowledge == Policy::Requested && i.header.at(8, 0) == "1");
+            let ack = partner.policy() == Policy::Always
+                || (partner.policy() == Policy::Requested && i.header.at(8, 0) == "1");
             let accepted = i.findings.is_empty() && !faults.contains(&Fault::Reject);
             self.findings(id, Some(iid), &i.findings)?;
             self.event("validated",Some(id),json!({"interchange":iid,"accepted":accepted,"messages":mids.len(),"findings":i.findings.len()}))?;
@@ -811,6 +812,97 @@ impl Engine {
             },
         };
         let t = self.task(p, None, (None, None), "command: send", vec![action], None)?;
+        self.execute(t)
+    }
+    /// Switches a partner to an installed case, or `default` for its own
+    /// rules, and records the choice in `vendredi.toml`.
+    pub fn use_case(&mut self, name: &str, id: &str) -> Result<()> {
+        let p = self.partner(name)?;
+        let mut partner = self.workspace.partners[p].clone();
+        let from = partner.case_id().to_owned();
+        partner.activate(&self.workspace.cases, id)?;
+        if id != crate::case::DEFAULT {
+            // Re-read the files so edits since the workspace opened are checked.
+            crate::case::Bundle::load(&self.workspace.root.join(crate::case::DIRECTORY).join(id))?;
+        }
+        crate::config::persist_case(&self.workspace.root, name, id)?;
+        self.workspace.partners[p] = partner;
+        self.event(
+            "case_switched",
+            None,
+            json!({"partner":name,"from":from,"to":id}),
+        )
+    }
+    /// Receives a sample message of the partner's active case as if the
+    /// integration had sent it, enveloped from the workspace to the partner.
+    pub fn sample(&mut self, name: &str, sample: &str) -> Result<i64> {
+        let p = self.partner(name)?;
+        let partner = &self.workspace.partners[p];
+        let id = partner.case_id().to_owned();
+        let case = self
+            .workspace
+            .cases
+            .iter()
+            .find(|c| c.id == id)
+            .with_context(|| format!("partner {name} has no active case with samples"))?;
+        let document = &case
+            .sample(sample)
+            .with_context(|| format!("case {id} has no sample named {sample}"))?
+            .document;
+        let path = self
+            .workspace
+            .root
+            .join(crate::case::DIRECTORY)
+            .join(&id)
+            .join(document);
+        let message = edi::document(&fs::read(&path).with_context(|| path.display().to_string())?)?;
+        let next = self.store.query(
+            "SELECT last_id+1 FROM transfer_sequence WHERE singleton=1",
+            (),
+        )?[0]
+            .get::<i64>(0)?;
+        let bytes = edi::envelope(
+            &edi::Envelope {
+                syntax: partner.syntax()?,
+                charset: &partner.charset,
+                sender: &self.workspace.identity,
+                recipient: &partner.identity,
+                reference: &format!("S{next}"),
+                time: DateTime::from_timestamp_millis(self.clock.millis())
+                    .context("invalid clock")?,
+                wrong_count: false,
+            },
+            &message,
+        )?;
+        let transfer = self
+            .receive(p, &bytes, json!({"case":id,"sample":sample}), None)?
+            .context("sample not recorded")?;
+        self.process(p, transfer, edi::parse(&bytes))?;
+        Ok(transfer)
+    }
+    /// Runs a partner-initiated send defined by the active case.
+    pub fn initiate_case(&mut self, name: &str, send: &str) -> Result<()> {
+        let p = self.partner(name)?;
+        let partner = &self.workspace.partners[p];
+        let i = partner
+            .active
+            .as_ref()
+            .and_then(|a| a.initiate.iter().find(|i| i.name == send))
+            .with_context(|| {
+                format!(
+                    "case {} has no partner-initiated send named {send}",
+                    partner.case_id()
+                )
+            })?
+            .clone();
+        let t = self.task(
+            p,
+            None,
+            (None, None),
+            &format!("initiate: {}", i.name),
+            i.actions,
+            None,
+        )?;
         self.execute(t)
     }
     pub fn resend(&mut self, id: i64) -> Result<()> {
@@ -1297,6 +1389,118 @@ mod tests {
             .unwrap();
         assert!(
             error.contains("script send 1") && error.contains("envelope"),
+            "{error}"
+        );
+        Ok(())
+    }
+
+    fn install(dir: &Path, json: &str) -> Result<()> {
+        let bundle =
+            crate::case::Bundle::resolve(crate::case::Case::parse(json.as_bytes())?, |p| {
+                anyhow::bail!("{} missing", p.display())
+            })?;
+        bundle.write(&dir.join("cases").join(&bundle.case.id))
+    }
+
+    #[test]
+    fn cases_switch_persist_and_drive_samples() -> Result<()> {
+        let (dir, _) = fixture()?;
+        install(
+            dir.path(),
+            include_str!("../../../examples/cases/reject-orders.json"),
+        )?;
+        install(
+            dir.path(),
+            include_str!("../../../examples/cases/send-invoice.json"),
+        )?;
+        let w = Workspace::load(dir.path())?;
+        assert_eq!(w.cases.len(), 2);
+        let clock = Arc::new(Manual(AtomicI64::new(1000)));
+        let mut e = Engine::open(w, clock.clone())?;
+        e.use_case("Supplier", "reject-orders")?;
+        input(&mut e, 0, ORDER)?;
+        let replies = e.take_deliveries();
+        assert_eq!(replies.len(), 1);
+        assert!(replies[0].bytes.windows(2).any(|w| w == b"+4"));
+        let events = e.take_events();
+        assert!(
+            events
+                .iter()
+                .any(|v| v["event"] == "case_switched" && v["to"] == "reject-orders")
+        );
+        assert!(
+            events
+                .iter()
+                .any(|v| v["event"] == "execution" && v["case"] == "reject-orders")
+        );
+        e.use_case("Supplier", "send-invoice")?;
+        let sample = e.sample("Supplier", "Order")?;
+        let replies = e.take_deliveries();
+        assert_eq!(replies.len(), 2);
+        assert_eq!(e.detail(sample)?["findings"].as_array().unwrap().len(), 0);
+        let kinds: Vec<_> = replies
+            .iter()
+            .map(|d| {
+                edi::parse(&d.bytes).interchanges[0].messages[0]
+                    .kind()
+                    .to_owned()
+            })
+            .collect();
+        assert_eq!(kinds, ["CONTRL", "ORDRSP"]);
+        e.initiate_case("Supplier", "Invoice")?;
+        let invoice = e.take_deliveries().pop().unwrap();
+        assert_eq!(
+            edi::parse(&invoice.bytes).interchanges[0].messages[0].kind(),
+            "INVOIC"
+        );
+        assert!(e.sample("Supplier", "Missing").is_err());
+        assert!(e.use_case("Supplier", "not-installed").is_err());
+        drop(e);
+        let w = Workspace::load(dir.path())?;
+        assert_eq!(w.partners[0].case_id(), "send-invoice");
+        assert_eq!(w.partners[0].cases, ["reject-orders", "send-invoice"]);
+        let mut e = Engine::open(w, clock)?;
+        e.use_case("Supplier", "default")?;
+        input(&mut e, 0, ORDER)?;
+        assert_eq!(e.take_deliveries().len(), 2);
+        drop(e);
+        assert_eq!(
+            Workspace::load(dir.path())?.partners[0].case_id(),
+            "default"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_installed_cases_name_the_file() -> Result<()> {
+        let (dir, _) = fixture()?;
+        install(
+            dir.path(),
+            include_str!("../../../examples/cases/confirm-orders.json"),
+        )?;
+        let folder = dir.path().join("cases/confirm-orders");
+        fs::write(folder.join("confirm.js"), "function confirm( {")?;
+        // An inactive case is checked when it is activated.
+        let mut e = Engine::open(Workspace::load(dir.path())?, Arc::new(SystemClock))?;
+        let error = format!(
+            "{:#}",
+            e.use_case("Supplier", "confirm-orders").unwrap_err()
+        );
+        assert!(error.contains("confirm.js"), "{error}");
+        drop(e);
+        crate::config::persist_case(dir.path(), "Supplier", "confirm-orders")?;
+        let error = format!("{:#}", Workspace::load(dir.path()).unwrap_err());
+        assert!(error.contains("confirm.js"), "{error}");
+        fs::remove_file(folder.join("confirm.js"))?;
+        let error = format!("{:#}", Workspace::load(dir.path()).unwrap_err());
+        assert!(
+            error.contains("confirm.js") && error.contains("cases/confirm-orders"),
+            "{error}"
+        );
+        fs::remove_dir_all(&folder)?;
+        let error = format!("{:#}", Workspace::load(dir.path()).unwrap_err());
+        assert!(
+            error.contains("confirm-orders, which is not installed"),
             "{error}"
         );
         Ok(())

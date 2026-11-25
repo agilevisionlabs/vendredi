@@ -1,0 +1,46 @@
+{
+  "vendredi_case": 1,
+  "id": "confirm-orders",
+  "name": "Confirm every order",
+  "description": "Acknowledges each ORDERS with a positive CONTRL and confirms it with an ORDRSP that echoes the order number.",
+  "standard": "edifact",
+  "tags": [
+    "orders",
+    "happy-path"
+  ],
+  "acknowledge": "always",
+  "rules": [
+    {
+      "name": "Orders",
+      "message": "ORDERS",
+      "version": "D96A",
+      "actions": [
+        {
+          "script": "confirm.js",
+          "function": "confirm"
+        }
+      ]
+    }
+  ],
+  "samples": [
+    {
+      "name": "Order",
+      "document": "order.edi"
+    }
+  ],
+  "expect": [
+    {
+      "sample": "Order",
+      "replies": [
+        "ack.edi",
+        "ordrsp.edi"
+      ]
+    }
+  ],
+  "files": {
+    "order.edi": "UNH+1+ORDERS:D:96A:UN'BGM+220+PO1001+9'DTM+137:20261125:102'NAD+BY+5412345000013::9'LIN+1++4000862141404:SRS'QTY+21:48'UNT+7+1'",
+    "ack.edi": "UNH+1+CONTRL:D:96A:UN'UCI+S1+BUYER:ZZ+PARTNER:ZZ+7'UNT+3+1'",
+    "ordrsp.edi": "UNH+1+ORDRSP:D:96A:UN'BGM+231+PO1001+29'UNT+3+1'",
+    "confirm.js": "function confirm(interchange, api) {\n    const order = interchange.groups[0].messages[0];\n    const bgm = order.segments.find(s => s[0] === \"BGM\");\n    api.log(\"Confirming \" + bgm[2]);\n    api.send(api.build(\"ORDRSP\", order.version, [[\"BGM\", \"231\", bgm[2], \"29\"]]));\n}\n"
+  }
+}

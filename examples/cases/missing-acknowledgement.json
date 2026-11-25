@@ -1,0 +1,43 @@
+{
+  "vendredi_case": 1,
+  "id": "missing-acknowledgement",
+  "name": "Confirm without acknowledging",
+  "description": "Sends the ORDRSP but never a CONTRL, so the integration waits for an acknowledgement that does not come.",
+  "standard": "edifact",
+  "tags": [
+    "orders",
+    "fault",
+    "acknowledgement"
+  ],
+  "acknowledge": "never",
+  "rules": [
+    {
+      "name": "Orders",
+      "message": "ORDERS",
+      "version": "D96A",
+      "actions": [
+        {
+          "document": "ordrsp.edi"
+        }
+      ]
+    }
+  ],
+  "samples": [
+    {
+      "name": "Order",
+      "document": "order.edi"
+    }
+  ],
+  "expect": [
+    {
+      "sample": "Order",
+      "replies": [
+        "ordrsp.edi"
+      ]
+    }
+  ],
+  "files": {
+    "order.edi": "UNH+1+ORDERS:D:96A:UN'BGM+220+PO1001+9'DTM+137:20261125:102'NAD+BY+5412345000013::9'LIN+1++4000862141404:SRS'QTY+21:48'UNT+7+1'",
+    "ordrsp.edi": "UNH+1+ORDRSP:D:96A:UN'BGM+231+PO1001+29'UNT+3+1'"
+  }
+}

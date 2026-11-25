@@ -1,0 +1,17 @@
+{
+  "vendredi_catalog": 1,
+  "name": "Vendredi starter cases",
+  "cases": [
+    "confirm-orders.json",
+    "reject-orders.json",
+    "missing-acknowledgement.json",
+    "delayed-confirmation.json",
+    "failing-http.json",
+    "slow-http.json",
+    "duplicate-reference.json",
+    "duplicate-delivery.json",
+    "malformed-reply.json",
+    "wrong-count.json",
+    "send-invoice.json"
+  ]
+}
