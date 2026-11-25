@@ -377,10 +377,22 @@ impl Engine {
                 )
             })
             .collect::<Result<Vec<_>>>()?;
+        // X12 functional groups, by GS06, with their transaction sets.
+        let groups = self
+            .store
+            .query(
+                "SELECT m.grp, group_concat(m.type || ' ' || m.reference, ', ') FROM messages m
+                 JOIN interchanges i ON i.id=m.interchange WHERE i.transfer=? AND m.grp<>''
+                 GROUP BY m.grp ORDER BY min(m.id)",
+                [id],
+            )?
+            .iter()
+            .map(|r| Ok(json!({"reference":r.get::<String>(0)?,"sets":r.get::<String>(1)?})))
+            .collect::<Result<Vec<_>>>()?;
         let findings=self.store.query("SELECT severity,code,offset,text FROM findings WHERE transfer=? ORDER BY offset,id",[id])?
             .iter().map(|r|Ok(json!({"severity":r.get::<String>(0)?,"code":r.get::<String>(1)?,"offset":r.get::<i64>(2)?,"text":r.get::<String>(3)?}))).collect::<Result<Vec<_>>>()?;
         Ok(
-            json!({"transfer":id,"segments":interchange::lines(&bytes),"findings":findings,"interchanges":summaries,"status":r.get::<String>(2)?,"metadata":r.get::<String>(1)?,"bytes":bytes,"raw":edi::latin1(&bytes),"parsed":(interchange::detect(&bytes) != Some(Standard::X12)).then(|| edi::parse(&bytes)),"events":events}),
+            json!({"transfer":id,"segments":interchange::lines(&bytes),"findings":findings,"interchanges":summaries,"groups":groups,"status":r.get::<String>(2)?,"metadata":r.get::<String>(1)?,"bytes":bytes,"raw":edi::latin1(&bytes),"parsed":(interchange::detect(&bytes) != Some(Standard::X12)).then(|| edi::parse(&bytes)),"events":events}),
         )
     }
     pub fn partner(&self, name: &str) -> Result<usize> {
@@ -1630,6 +1642,11 @@ mod tests {
         );
         let rows = e.traffic("855")?;
         assert_eq!(rows.len(), 3);
+        let inbound_id = e.traffic("in")?[0].id;
+        assert_eq!(
+            e.detail(inbound_id)?["groups"],
+            json!([{"reference":"1001","sets":"850 0001, 850 0002"},{"reference":"1002","sets":"850 0003"}])
+        );
         assert_eq!(rows[0].version, "005010");
         let inbound = e.traffic("in")?.pop().unwrap();
         assert_eq!(
@@ -1799,7 +1816,6 @@ mod tests {
                 api.send(api.build('855', g.version, [['BAK', '00', 'AC', beg[3], beg[5]], ['REF', 'DP', ref[2], ref[3]]]));
             }",
         )?;
-        let mut w = w;
         w.partners[0].x12 = Some(Default::default());
         w.partners[0].acknowledge = Policy::Never;
         w.partners[0].rules[0].actions = vec![Action::Script {

@@ -2,7 +2,7 @@ use super::*;
 use egui::{Align, ComboBox, Layout, RichText, ScrollArea, Ui};
 use form::field;
 use toml_edit::DocumentMut;
-use vendredi_core::config::{Partner, Policy};
+use vendredi_core::config::{GroupAck, Partner, Policy, Standard, X12};
 use workspace_edit::tables;
 
 pub(super) struct PartnerForm {
@@ -59,8 +59,25 @@ impl PartnerForm {
         ensure!(!p.name.trim().is_empty(), "Enter a partner name.");
         ensure!(
             !p.identity[0].trim().is_empty(),
-            "Enter the partner’s EDIFACT identifier."
+            "Enter the partner’s {} identifier.",
+            p.standard.label()
         );
+        match p.standard {
+            Standard::Edifact => p.x12 = None,
+            Standard::X12 => {
+                p.separators = None;
+                let x = p.x12.get_or_insert_with(X12::default);
+                for value in [
+                    &mut x.application,
+                    &mut x.workspace_application,
+                    &mut x.delimiters,
+                ] {
+                    if value.as_ref().is_some_and(|v| v.trim().is_empty()) {
+                        *value = None;
+                    }
+                }
+            }
+        }
         ensure!(!p.receive.is_empty(), "Add at least one intake channel.");
         for channel in &p.receive {
             if let Receive::Folder { directory, .. } = channel {
@@ -87,9 +104,13 @@ impl PartnerForm {
         }
         let mut data = toml_edit::ser::to_document(p)?.into_table();
         data.remove("rules");
+        if p.standard == Standard::X12 {
+            data.remove("charset");
+        }
         if let Some(i) = self.index {
             let old = toml_edit::ser::to_document(&app.workspace.partners[i])?;
             let table = list.get_mut(i).context("missing partner")?;
+            let present: Vec<String> = data.iter().map(|(k, _)| k.to_owned()).collect();
             for (key, item) in data {
                 if old
                     .get(&key)
@@ -98,8 +119,11 @@ impl PartnerForm {
                     table.insert(&key, item);
                 }
             }
-            if p.separators.is_none() {
-                table.remove("separators");
+            // Settings of the other standard no longer apply.
+            for key in ["separators", "x12", "standard", "charset"] {
+                if !present.iter().any(|k| k == key) {
+                    table.remove(key);
+                }
             }
         } else {
             list.push(data);
@@ -119,12 +143,23 @@ impl PartnerForm {
                 name.request_focus();
                 self.focus_name = false;
             }
-            form::input(
-                &mut cols[1],
-                "EDIFACT identifier",
-                &mut p.identity[0],
-                "e.g. ACME",
-            );
+            let label = match p.standard {
+                Standard::Edifact => "EDIFACT identifier",
+                Standard::X12 => "ISA identifier",
+            };
+            form::input(&mut cols[1], label, &mut p.identity[0], "e.g. ACME");
+        });
+        ui.horizontal(|ui| {
+            form::label(ui, "EDI standard");
+            for standard in [Standard::Edifact, Standard::X12] {
+                if ui
+                    .radio_value(&mut p.standard, standard, standard.label())
+                    .changed()
+                    && standard == Standard::X12
+                {
+                    p.x12.get_or_insert_with(X12::default);
+                }
+            }
         });
         if self
             .index
@@ -140,17 +175,28 @@ impl PartnerForm {
             Policy::Never => "Never acknowledge",
         };
         let mut header = egui::text::LayoutJob::default();
+        let summary = match p.standard {
+            Standard::Edifact => format!("{} · {policy}", p.charset),
+            Standard::X12 => {
+                let x = p.x12.get_or_insert_with(X12::default);
+                let ack = match x.acknowledgement {
+                    GroupAck::FunctionalAck => "997",
+                    GroupAck::ImplementationAck => "999",
+                };
+                format!(
+                    "{} · {ack}{} · {policy}",
+                    x.version,
+                    if x.ta1 { " + TA1" } else { "" }
+                )
+            }
+        };
         header.append(
-            "EDIFACT settings",
+            &format!("{} settings", p.standard.label()),
             0.,
             egui::TextFormat::simple(font(13.), TEXT),
         );
-        header.append(
-            &format!("{} · {policy}", p.charset),
-            12.,
-            egui::TextFormat::simple(font(12.), MUTED),
-        );
-        let options = egui::CollapsingHeader::new(header).id_salt("partner EDIFACT settings");
+        header.append(&summary, 12., egui::TextFormat::simple(font(12.), MUTED));
+        let options = egui::CollapsingHeader::new(header).id_salt("partner EDI settings");
         options.show(ui, |ui| {
             form::label(ui, "Send acknowledgements");
             ui.horizontal_wrapped(|ui| {
@@ -177,6 +223,10 @@ impl PartnerForm {
                     p.identity.pop();
                 }
             });
+            if let (Standard::X12, Some(x)) = (p.standard, &mut p.x12) {
+                x12_settings(ui, x);
+                return;
+            }
             ui.horizontal(|ui| {
                 ui.label("Character set");
                 ComboBox::from_id_salt("charset")
@@ -311,6 +361,50 @@ impl PartnerForm {
             }
         });
     }
+}
+
+fn optional_field(ui: &mut Ui, label: &str, value: &mut Option<String>, hint: &str) {
+    let mut text = value.clone().unwrap_or_default();
+    if form::input(ui, label, &mut text, hint).changed() {
+        *value = Some(text);
+    }
+}
+
+fn x12_settings(ui: &mut Ui, x: &mut X12) {
+    ui.columns(2, |cols| {
+        form::input(&mut cols[0], "Version (GS08)", &mut x.version, "005010");
+        form::label(&mut cols[1], "Usage (ISA15)");
+        cols[1].horizontal(|ui| {
+            ui.radio_value(&mut x.usage, 'T', "Test");
+            ui.radio_value(&mut x.usage, 'P', "Production");
+        });
+    });
+    form::label(ui, "Group acknowledgement");
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut x.acknowledgement, GroupAck::FunctionalAck, "997");
+        ui.radio_value(&mut x.acknowledgement, GroupAck::ImplementationAck, "999");
+        ui.checkbox(&mut x.ta1, "Also send TA1");
+    });
+    ui.columns(2, |cols| {
+        optional_field(
+            &mut cols[0],
+            "Partner application (GS)",
+            &mut x.application,
+            "Identifier",
+        );
+        optional_field(
+            &mut cols[1],
+            "Workspace application (GS)",
+            &mut x.workspace_application,
+            "Workspace identifier",
+        );
+    });
+    optional_field(
+        ui,
+        "Delimiters: element, repetition, component, segment",
+        &mut x.delimiters,
+        "*^:~ (U for no repetition before 00402)",
+    );
 }
 
 fn path_field(ui: &mut Ui, label: &str, path: &mut PathBuf) {
@@ -508,6 +602,82 @@ mod tests {
         click(&mut app, &ctx, "North Freight")?;
         click(&mut app, &ctx, "Remove partner")?;
         assert!(app.partner_removal.is_none());
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "uses a local listener"]
+    fn add_and_convert_an_x12_partner() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        crate::sample(dir.path())?;
+        let config = dir.path().join("vendredi.toml");
+        fs::write(&config, fs::read_to_string(&config)?.replace(":8180", ":0"))?;
+        let ctx = egui::Context::default();
+        let mut app = Desktop::open(dir.path().into(), &ctx)?;
+        click(&mut app, &ctx, "+ Add partner")?;
+        click(&mut app, &ctx, "X12")?;
+        let form = app.partner_form.as_mut().context("missing partner form")?;
+        assert_eq!(form.partner.standard, Standard::X12);
+        form.partner.name = "Retailer".into();
+        form.partner.identity[0] = "RETAILER".into();
+        let x = form.partner.x12.as_mut().unwrap();
+        x.acknowledgement = GroupAck::ImplementationAck;
+        x.ta1 = true;
+        x.version = "004010".into();
+        x.delimiters = Some("*^:~".into());
+        click(&mut app, &ctx, "Save partner")?;
+        let error = app.partner_form.as_ref().map(|f| f.error.clone());
+        assert!(
+            error.as_deref().is_some_and(|e| e.contains("repetition")),
+            "{error:?}"
+        );
+        app.partner_form
+            .as_mut()
+            .unwrap()
+            .partner
+            .x12
+            .as_mut()
+            .unwrap()
+            .delimiters = Some("*U:~".into());
+        click(&mut app, &ctx, "Save partner")?;
+        ensure!(
+            app.partner_form.is_none(),
+            "{:?}",
+            app.partner_form.as_ref().map(|f| &f.error)
+        );
+        let w = Workspace::load(dir.path())?;
+        let retailer = &w.partners[1];
+        assert_eq!(retailer.standard, Standard::X12);
+        let x = retailer.x12();
+        assert_eq!(
+            (x.version.as_str(), x.acknowledgement, x.ta1),
+            ("004010", GroupAck::ImplementationAck, true)
+        );
+        let text = fs::read_to_string(&config)?;
+        let section = &text[text.find("name = \"Retailer\"").unwrap()..];
+        assert!(
+            !section.contains("charset") && section.contains("standard = \"x12\""),
+            "{section}"
+        );
+        click(&mut app, &ctx, "Retailer")?;
+        click(&mut app, &ctx, "Edit partner")?;
+        click(&mut app, &ctx, "EDIFACT")?;
+        click(&mut app, &ctx, "Save partner")?;
+        ensure!(
+            app.partner_form.is_none(),
+            "{:?}",
+            app.partner_form.as_ref().map(|f| &f.error)
+        );
+        let text = fs::read_to_string(&config)?;
+        let section = &text[text.find("name = \"Retailer\"").unwrap()..];
+        assert!(
+            !section.contains("x12") && !section.contains("standard"),
+            "{section}"
+        );
+        assert_eq!(
+            Workspace::load(dir.path())?.partners[1].standard,
+            Standard::Edifact
+        );
         Ok(())
     }
 }

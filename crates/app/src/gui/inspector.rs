@@ -188,6 +188,14 @@ impl Desktop {
                         false,
                     );
                 });
+                let groups = array(&self.detail, "groups");
+                if !groups.is_empty() {
+                    let summary: Vec<_> = groups
+                        .iter()
+                        .map(|g| format!("GS {} · {}", text(g, "reference"), text(g, "sets")))
+                        .collect();
+                    ui.label(muted(summary.join("   ")).monospace().size(11.));
+                }
                 let source = if row.outgoing {
                     "Sent by partner"
                 } else {
