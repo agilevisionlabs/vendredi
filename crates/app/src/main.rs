@@ -128,6 +128,7 @@ fn main() -> Result<()> {
             runner.wait()
         }
         [cmd, sub, dir] if cmd == "case" && sub == "list" => cases::list(Path::new(dir)),
+        [cmd, sub, source] if cmd == "case" && sub == "test" => cases::test_command(source),
         [cmd, sub, dir, source] if cmd == "case" && sub == "import" => {
             cases::import_command(Path::new(dir), source, false)
         }
@@ -150,7 +151,7 @@ fn main() -> Result<()> {
             offline(dir, words)
         }
         _ => bail!(
-            "usage: vendredi [gui WORKSPACE | init WORKSPACE | run --headless WORKSPACE | send WORKSPACE PARTNER FILE [FUNCTION] | resend WORKSPACE ID | inspect WORKSPACE ID | sample WORKSPACE PARTNER SAMPLE | initiate WORKSPACE PARTNER NAME | case list WORKSPACE | case use WORKSPACE PARTNER CASE | case import WORKSPACE PATH-OR-URL [--replace]]"
+            "usage: vendredi [gui WORKSPACE | init WORKSPACE | run --headless WORKSPACE | send WORKSPACE PARTNER FILE [FUNCTION] | resend WORKSPACE ID | inspect WORKSPACE ID | sample WORKSPACE PARTNER SAMPLE | initiate WORKSPACE PARTNER NAME | case list WORKSPACE | case use WORKSPACE PARTNER CASE | case import WORKSPACE PATH-OR-URL [--replace] | case test PATH-OR-URL]"
         ),
     }
 }

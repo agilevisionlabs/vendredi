@@ -417,6 +417,21 @@ class LocalExchange(unittest.TestCase):
         listed = subprocess.run([BINARY, "case", "list", remote], check=True, capture_output=True, text=True)
         self.assertIn("send-invoice", listed.stdout)
 
+    def test_case_self_test(self):
+        result = subprocess.run([BINARY, "case", "test", CASES], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("12 passed, 0 failed", result.stdout)
+        case = json.loads((CASES / "send-invoice.json").read_text())
+        case["files"]["expected.edi"] = case["files"]["invoic.edi"].replace("1250.00", "1250.50")
+        case["expect"][1]["replies"] = ["expected.edi"]
+        changed = self.root / "send-invoice.json"
+        changed.write_text(json.dumps(case))
+        result = subprocess.run([BINARY, "case", "test", changed], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("FAIL  send-invoice — initiate Invoice", result.stdout)
+        self.assertIn("ok    send-invoice — sample Order", result.stdout)
+        self.assertIn("reply 1 (expected.edi) differs at byte 73", result.stdout)
+
     def test_envelope_faults_and_duplicate_delivery(self):
         self.config = self.config.replace('url = "http://127.0.0.1:8181/replies"', 'directory = "out"')
         actions = '{ fault = "duplicate_reference" }, { fault = "wrong_count" }, { fault = "duplicate" }, { document = "confirmation.edi" }'

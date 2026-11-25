@@ -120,3 +120,37 @@ pub fn import_command(dir: &Path, source: &str, replace: bool) -> Result<()> {
     );
     Ok(())
 }
+
+/// `vendredi case test SOURCE`: runs every expectation of a case or catalog.
+pub fn test_command(source: &str) -> Result<()> {
+    let incoming = import::gather(source, &mut vendredi_transports::fetch, now())?;
+    let (mut passed, mut failed, mut untested) = (0, 0, Vec::new());
+    for i in &incoming {
+        let outcomes = vendredi_core::selftest::run(&i.bundle)?;
+        if outcomes.is_empty() {
+            untested.push(i.bundle.case.id.clone());
+        }
+        for o in outcomes {
+            if o.failures.is_empty() {
+                passed += 1;
+                println!("ok    {} — {}", o.case, o.check);
+            } else {
+                failed += 1;
+                println!("FAIL  {} — {}", o.case, o.check);
+                for line in o.failures.iter().flat_map(|f| f.lines()) {
+                    println!("      {line}");
+                }
+            }
+        }
+    }
+    if !untested.is_empty() {
+        println!("no expectations: {}", untested.join(", "));
+    }
+    println!("{passed} passed, {failed} failed");
+    anyhow::ensure!(
+        failed == 0,
+        "{failed} case check{} failed",
+        if failed == 1 { "" } else { "s" }
+    );
+    Ok(())
+}

@@ -157,6 +157,15 @@ impl Message {
     pub fn reference(&self) -> &str {
         self.header().at(0, 0)
     }
+    /// The message as document text with the default separators, the form
+    /// static documents and expected replies use.
+    pub fn text(&self) -> Result<String> {
+        let mut out = Vec::new();
+        for s in &self.segments {
+            s.encode(Syntax::default(), &mut out)?;
+        }
+        Ok(latin1(&out))
+    }
     fn validate(&self, findings: &mut Vec<Finding>) {
         let h = self.header();
         if h.at(0, 0).is_empty()
