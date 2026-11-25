@@ -50,6 +50,8 @@ Vendredi now runs both syntax validation and script execution in the Wasm guest.
 
 In one local headless comparison with v0.1.1, the median warm script command through delivery took 17.3 ms with Wasmtime and 6.7 ms with native Boa. Sampled peak RSS was 42.4 MB and 23.9 MB respectively. The release executables were 22.9 MB and 24.3 MB. The native CI matrix runs the same profile on each platform.
 
+The fixed-clock scripted order fixture consumed 7.43 million of 50 million fuel units and 2.06 MiB of the 32 MiB guest memory limit on Apple Silicon. Its request was 589 bytes and its response was 123 bytes. Native Boa and Wasmtime produced the same complete reply bytes and script log for this fixture. The packaged desktop check also posts an invoice to a Finder-launched app, inspects its scripted reply and reads the persisted partner state after exit.
+
 **Original migration plan.** Compile the pinned Boa interpreter and Vendredi’s JS wrapper into one bundled Wasm guest. Embed Wasmtime in the app. Existing workspaces continue to supply JavaScript source and a function name. The isolation boundary covers that code, including parsing it in the editor. Workspace configuration still controls host-side operations such as which script file to open and where to deliver messages.
 
 ### Prove the guest builds and runs

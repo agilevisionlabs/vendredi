@@ -8,6 +8,7 @@ import platform
 import plistlib
 import signal
 import socket
+import sqlite3
 import subprocess
 import tarfile
 import tempfile
@@ -51,6 +52,19 @@ def sample_exchange(root, port):
 def verify_finder_launch(app, binary, helper, home):
     workspace = home / "Vendredi"
     port = init_workspace(binary, workspace)
+    # Keep the bundled ORDERS exchange and exercise a second, scripted rule
+    # through the same running desktop's HTTP listener.
+    with (workspace / "vendredi.toml").open("a") as config:
+        config.write("""
+[[partners.rules]]
+name = "Scripted invoice reply"
+message = "INVOIC"
+actions = [{ script = "invoice.js", function = "reply" }]
+""")
+    (workspace / "invoice.js").write_text("""function reply(i, api) {
+        api.set("invoiceCount", (api.get("invoiceCount") || 0) + 1);
+        api.send(api.build("ORDRSP:D:96A:UN", "FTX+GUI-SCRIPT'"));
+    }""")
     # Launch the extracted app with no arguments and a disposable home directory.
     pid = int(subprocess.check_output([helper, "launch", app, home], timeout=30))
     try:
@@ -58,11 +72,28 @@ def verify_finder_launch(app, binary, helper, home):
         tty = subprocess.check_output(["ps", "-p", str(pid), "-o", "tty="], text=True)
         assert tty.strip() == "??", f"Finder launch has a controlling terminal: {tty}"
         sample_exchange(workspace, port)
+        invoice = (workspace / "order.edi").read_bytes().replace(b"ORDERS:D:", b"INVOIC:D:")
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        try:
+            conn.request("POST", "/supplier/orders", invoice)
+            response = conn.getresponse()
+            assert (response.status, response.read()) == (202, b"")
+        finally:
+            conn.close()
+        deadline = time.monotonic() + 8
+        while not any(b"FTX+GUI-SCRIPT'" in p.read_bytes() for p in (workspace / "replies").glob("*.edi")):
+            if time.monotonic() >= deadline:
+                raise AssertionError("scripted GUI reply missing")
+            time.sleep(0.02)
     finally:
         try:
             os.kill(pid, signal.SIGTERM)
         except ProcessLookupError:
             pass
+    # Turso releases its exclusive workspace lock when the GUI exits.
+    with sqlite3.connect(workspace / ".vendredi/vendredi.db", timeout=8) as db:
+        state, = db.execute("SELECT data FROM partner_state WHERE partner='Supplier'").fetchone()
+        assert json.loads(state)["invoiceCount"] == 1
 
 
 def profile(binary, helper, root, gui):
@@ -116,7 +147,7 @@ if __name__ == "__main__":
             assert icon.read_bytes()[:4] == b"icns"
             binary = contents / "MacOS" / info["CFBundleExecutable"]
             verify_finder_launch(app, binary, helper, root / "Finder Home")
-            print("Verified Finder launch, visible window, detached terminal and sample exchange.")
+            print("Verified Finder launch, visible window, static and scripted replies, and persisted script state.")
         info = dict(binary=str(binary), bytes=binary.stat().st_size, platform=platform.platform())
         info["measurements"] = [profile(binary, helper, root / str(gui), gui) for gui in [False, True]]
         print(json.dumps(info, indent=2))
