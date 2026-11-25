@@ -147,6 +147,27 @@ impl Desktop {
     }
 }
 
+/// Shared by the case list and the detail card, so both columns have the
+/// same border, corners and inner padding.
+fn case_frame(fill: egui::Color32, stroke: egui::Color32) -> egui::Frame {
+    egui::Frame::new()
+        .fill(fill)
+        .stroke(egui::Stroke::new(1_f32, stroke))
+        .corner_radius(8)
+        .inner_margin(egui::Margin::symmetric(16, 12))
+}
+
+/// The first line of a card: a fixed height, so titles of different sizes
+/// in the two columns share a centre line.
+fn title_row(ui: &mut Ui, contents: impl FnOnce(&mut Ui)) {
+    let size = egui::vec2(ui.available_width(), 24.);
+    ui.allocate_ui_with_layout(
+        size,
+        egui::Layout::left_to_right(egui::Align::Center),
+        contents,
+    );
+}
+
 impl Desktop {
     /// Rereads the configuration after the engine switched a case and wrote
     /// `vendredi.toml`, so later editor saves start from the new file.
@@ -189,14 +210,14 @@ impl Desktop {
             ui.heading("Cases");
             ui.add_space(20.);
             form::label(ui, "Partner");
-            // A menu button centres like the other buttons in the row;
-            // ComboBox positions itself against the row's full height.
+            // A button of the row's height opens the partner menu, so the
+            // picker matches Import cases… in size and centre line.
             let current = self.workspace.partners[self.partner].name.clone();
-            ui.menu_button(format!("{current}  ⏷"), |ui| {
+            let picker = button(ui, &format!("{current}  ⏷"), false);
+            egui::Popup::menu(&picker).show(|ui| {
                 for (i, p) in self.workspace.partners.iter().enumerate() {
                     if ui.selectable_label(i == self.partner, &p.name).clicked() {
                         self.partner = i;
-                        ui.close();
                     }
                 }
             });
@@ -252,9 +273,12 @@ impl Desktop {
                     .iter()
                     .find(|c| c.id == self.case)
                     .cloned();
-                form::card(ui, |ui| match &selected {
-                    Some(c) => self.case_detail(ui, c, active == c.id),
-                    None => self.default_case_detail(ui, active == case::DEFAULT),
+                case_frame(PANEL, LINE).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    match &selected {
+                        Some(c) => self.case_detail(ui, c, active == c.id),
+                        None => self.default_case_detail(ui, active == case::DEFAULT),
+                    }
                 });
             });
         });
@@ -262,28 +286,22 @@ impl Desktop {
 
     fn case_row(&mut self, ui: &mut Ui, id: &str, name: &str, tags: &[String], active: bool) {
         let selected = self.case == id;
-        let frame = egui::Frame::new()
-            .fill(if selected { SURFACE } else { BG })
-            .stroke(egui::Stroke::new(1_f32, if selected { BLUE } else { LINE }))
-            .corner_radius(6)
-            .inner_margin(egui::Margin::symmetric(10, 8));
+        let frame = case_frame(
+            if selected { SURFACE } else { BG },
+            if selected { BLUE } else { LINE },
+        );
         frame.show(ui, |ui| {
             ui.set_width(ui.available_width());
-            let row = egui::vec2(ui.available_width(), 22.);
-            ui.allocate_ui_with_layout(
-                row,
-                egui::Layout::left_to_right(egui::Align::Center),
-                |ui| {
-                    if ui.link(RichText::new(name).font(bold(13.))).clicked() {
-                        self.case = id.into();
-                    }
-                    if active {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            badge(ui, "Active", BLUE, SURFACE, false);
-                        });
-                    }
-                },
-            );
+            title_row(ui, |ui| {
+                if ui.link(RichText::new(name).font(bold(13.))).clicked() {
+                    self.case = id.into();
+                }
+                if active {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        badge(ui, "Active", BLUE, SURFACE, false);
+                    });
+                }
+            });
             ui.horizontal_wrapped(|ui| {
                 ui.label(muted(id).monospace().size(11.));
                 for tag in tags {
@@ -297,9 +315,13 @@ impl Desktop {
     fn activate_button(&mut self, ui: &mut Ui, id: &str, active: bool, compatible: bool) {
         let partner = self.workspace.partners[self.partner].name.clone();
         if active {
-            ui.label(muted(format!("Active for {partner}")));
+            badge(ui, "Active", BLUE, SURFACE, false);
+            ui.label(muted(format!("for {partner}")));
         } else if ui
-            .add_enabled(compatible, egui::Button::new("Make active"))
+            .add_enabled(
+                compatible,
+                egui::Button::new("Make active").min_size(egui::vec2(0., 36.)),
+            )
             .on_disabled_hover_text("This case is written for another EDI standard.")
             .clicked()
         {
@@ -309,7 +331,9 @@ impl Desktop {
 
     fn default_case_detail(&mut self, ui: &mut Ui, active: bool) {
         let p = &self.workspace.partners[self.partner];
-        ui.label(RichText::new("Partner's own rules").font(bold(17.)));
+        title_row(ui, |ui| {
+            ui.label(RichText::new("Partner's own rules").font(bold(17.)));
+        });
         ui.label(muted(format!(
             "The {} rule{} configured on {} under Rules.",
             p.rules.len(),
@@ -317,14 +341,16 @@ impl Desktop {
             p.name
         )));
         ui.add_space(8.);
-        ui.horizontal(|ui| self.activate_button(ui, case::DEFAULT, active, true));
+        header_row(ui, |ui| {
+            self.activate_button(ui, case::DEFAULT, active, true)
+        });
     }
 
     fn case_detail(&mut self, ui: &mut Ui, c: &Case, active: bool) {
         let partner = &self.workspace.partners[self.partner];
         let compatible = c.standard == partner.standard;
         let name = partner.name.clone();
-        ui.horizontal_wrapped(|ui| {
+        title_row(ui, |ui| {
             ui.label(RichText::new(&c.name).font(bold(17.)));
             badge(ui, c.standard.label(), SECONDARY_TEXT, SURFACE, true);
         });
@@ -350,7 +376,7 @@ impl Desktop {
             ui.label(muted(format!("Acknowledgement: {policy:?}").to_lowercase()));
         }
         ui.add_space(8.);
-        ui.horizontal(|ui| self.activate_button(ui, &c.id, active, compatible));
+        header_row(ui, |ui| self.activate_button(ui, &c.id, active, compatible));
         if !c.samples.is_empty() || !c.initiate.is_empty() {
             ui.add_space(8.);
             form::label(
@@ -407,6 +433,10 @@ mod tests {
         });
         let mut app = Desktop::open(dir.path().into(), &ctx)?;
         click(&mut app, &ctx, "Cases")?;
+        // The partner picker opens a menu of partners.
+        click(&mut app, &ctx, "Supplier  ⏷")?;
+        click(&mut app, &ctx, "Supplier")?;
+        assert_eq!(app.partner, 0);
         click(&mut app, &ctx, "Reject every order")?;
         assert_eq!(app.case, "reject-orders");
         click(&mut app, &ctx, "Make active")?;
