@@ -8,6 +8,9 @@ pub(super) const NEW: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAN
 pub(super) const SAVE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::S);
 pub(super) const SEND: KeyboardShortcut =
     KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::S);
+pub(super) const NEW_PARTNER: KeyboardShortcut =
+    KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::N);
+pub(super) const IMPORT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::I);
 /// ⌘1 to ⌘5 open these pages.
 const PAGES: [(Key, View); 5] = [
     (Key::Num1, View::All),
@@ -146,11 +149,15 @@ impl Desktop {
                 self.perform(Do::Page(view));
             }
         }
+        // Shift variants first, so ⇧⌘N is not taken as ⌘N. On macOS the menu
+        // bar catches these keys before the window; elsewhere they land here.
         for (shortcut, action) in [
+            (NEW_PARTNER, Do::NewPartner),
+            (SEND, Do::Send),
             (SEARCH, Do::Search),
             (NEW, Do::New),
-            (SEND, Do::Send),
             (SAVE, Do::Save),
+            (IMPORT, Do::Import),
         ] {
             if pressed(&shortcut) {
                 self.perform(action);
@@ -239,6 +246,19 @@ mod tests {
         assert_ne!(app.case, first);
         frame(&mut app, &ctx, key(Key::ArrowUp, Modifiers::NONE));
         assert_eq!(app.case, first);
+        frame(&mut app, &ctx, key(Key::N, Modifiers::COMMAND));
+        assert!(app.case_form.is_some());
+        app.case_form = None;
+        frame(&mut app, &ctx, key(Key::I, Modifiers::COMMAND));
+        assert!(app.import.is_some());
+        app.import = None;
+        frame(
+            &mut app,
+            &ctx,
+            key(Key::N, Modifiers::COMMAND.plus(Modifiers::SHIFT)),
+        );
+        assert!(app.partner_form.is_some() && app.case_form.is_none());
+        app.partner_form = None;
         frame(&mut app, &ctx, key(Key::N, Modifiers::COMMAND));
         assert!(app.case_form.is_some());
         // Shortcuts wait while a dialog is open.
