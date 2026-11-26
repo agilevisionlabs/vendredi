@@ -68,6 +68,14 @@ pub fn run(root: Option<PathBuf>) -> Result<()> {
             #[cfg(target_os = "macos")]
             {
                 session._menu = menu::install(&cc.egui_ctx).ok();
+                // A check for the running app: print the installed menu bar and quit.
+                if std::env::var_os("VENDREDI_MENU_DUMP").is_some() {
+                    match &session._menu {
+                        Some(m) => print!("{}", menu::describe(m)),
+                        None => println!("no menu bar"),
+                    }
+                    std::process::exit(0);
+                }
             }
             if let (Some(storage), Some(Ok(app))) = (cc.storage, &mut session.desktop) {
                 app.restore(storage.get_string(&place_key(&app.root)).as_deref());

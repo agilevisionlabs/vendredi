@@ -71,17 +71,17 @@ pub(super) fn install(ctx: &egui::Context) -> anyhow::Result<Menu> {
         "Vendredi",
         true,
         &[
-            &PredefinedMenuItem::about(None, Some(about)),
+            &PredefinedMenuItem::about(Some("About Vendredi"), Some(about)),
             &PredefinedMenuItem::separator(),
             &item("preferences"),
             &PredefinedMenuItem::separator(),
             &PredefinedMenuItem::services(None),
             &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::hide(None),
+            &PredefinedMenuItem::hide(Some("Hide Vendredi")),
             &PredefinedMenuItem::hide_others(None),
             &PredefinedMenuItem::show_all(None),
             &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::quit(None),
+            &PredefinedMenuItem::quit(Some("Quit Vendredi")),
         ],
     )?;
     let file = Submenu::with_items(
@@ -137,6 +137,8 @@ pub(super) fn install(ctx: &egui::Context) -> anyhow::Result<Menu> {
             &item("report"),
         ],
     )?;
+    // The app menu names Vendredi itself; by default AppKit uses the
+    // executable's name, which is lowercase outside the app bundle.
     let menu = Menu::with_items(&[&app, &file, &view, &window, &help])?;
     menu.init_for_nsapp();
     window.set_as_windows_menu_for_nsapp();
@@ -153,6 +155,42 @@ type Channel = (
     std::sync::Mutex<mpsc::Sender<String>>,
     std::sync::Mutex<mpsc::Receiver<String>>,
 );
+
+/// The menu bar as text, one item per line, for checking the installed
+/// menu of a running app (`VENDREDI_MENU_DUMP`).
+pub(super) fn describe(menu: &Menu) -> String {
+    use muda::MenuItemKind;
+    fn walk(items: Vec<MenuItemKind>, depth: usize, out: &mut String) {
+        for item in items {
+            let text = match &item {
+                MenuItemKind::MenuItem(i) => {
+                    // muda has no accelerator getter; the table holds them.
+                    let key = ITEMS
+                        .iter()
+                        .find(|(id, ..)| *id == i.id().0)
+                        .and_then(|(_, _, k)| *k)
+                        .map(|k| format!("  [{k}]"))
+                        .unwrap_or_default();
+                    format!("{}{key}", i.text())
+                }
+                MenuItemKind::Submenu(s) => s.text(),
+                MenuItemKind::Predefined(p) => {
+                    let t = p.text();
+                    if t.is_empty() { "—".into() } else { t }
+                }
+                MenuItemKind::Check(c) => c.text(),
+                MenuItemKind::Icon(i) => i.text(),
+            };
+            out.push_str(&format!("{}{text}\n", "  ".repeat(depth)));
+            if let MenuItemKind::Submenu(s) = &item {
+                walk(s.items(), depth + 1, out);
+            }
+        }
+    }
+    let mut out = String::new();
+    walk(menu.items(), 0, &mut out);
+    out
+}
 
 /// Menu choices waiting for the next frame.
 static MENU_EVENTS: std::sync::LazyLock<Channel> = std::sync::LazyLock::new(|| {
