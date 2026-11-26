@@ -400,15 +400,35 @@ impl Desktop {
                     }
                 }
                 if rows.is_empty() {
-                    Frame::new().inner_margin(12).show(ui, |ui| {
+                    Frame::new().inner_margin(PAGE_MARGIN).show(ui, |ui| {
                         if self.transfers.is_empty() {
-                            ui.label(muted("Waiting for the first interchange."));
-                            if self.listening
-                                && self.root.join("order.edi").is_file()
-                                && ui.link("Send sample order").clicked()
-                                && let Err(e) = self.sample(self.partner)
-                            {
+                            let url = self.receive_url(self.partner);
+                            let text = match (&url, self.listening) {
+                                (_, false) => "Vendredi is paused. Resume to receive messages from partners.".to_owned(),
+                                (Some(url), true) => format!(
+                                    "Vendredi is listening at {url}. Send a sample order to see a full exchange: the order, its acknowledgement and the reply."
+                                ),
+                                (None, true) => "Vendredi is watching the partner's folders. Send a sample order to see a full exchange.".to_owned(),
+                            };
+                            let mut sample = false;
+                            let mut copy = false;
+                            empty_state(ui, "No traffic yet", &text, |ui| {
+                                if self.listening && self.root.join("order.edi").is_file() {
+                                    sample = button(ui, "Send sample order", true).clicked();
+                                }
+                                if url.is_some() {
+                                    copy = button(ui, "Copy URL", false).clicked();
+                                }
+                                if button(ui, "Open the guide", false).clicked() {
+                                    shortcuts::open_externally(shortcuts::GUIDE, false);
+                                }
+                            });
+                            if sample && let Err(e) = self.sample(self.partner) {
                                 self.fail(e.to_string());
+                            }
+                            if copy && let Some(url) = url {
+                                ui.ctx().copy_text(url);
+                                self.status = "URL copied".into();
                             }
                         } else {
                             ui.label(muted("No matching transfers."));

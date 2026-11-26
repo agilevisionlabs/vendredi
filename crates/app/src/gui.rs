@@ -559,10 +559,16 @@ impl Desktop {
         ui.heading(title);
         ui.add_space(GAP_S);
         if self.files().is_empty() {
-            ui.label(format!(
-                "No {} configured in this workspace.",
-                title.to_lowercase()
-            ));
+            empty_state(
+                ui,
+                "No documents yet",
+                "Documents are the fixed replies a case sends, such as an order response. They appear here when the active cases use them.",
+                |ui| {
+                    if button(ui, "Open Cases", false).clicked() {
+                        self.navigate(View::Cases);
+                    }
+                },
+            );
             return;
         }
         let dirty = self.edit != self.saved;

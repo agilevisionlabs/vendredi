@@ -389,22 +389,25 @@ impl Desktop {
         }
     }
 
+    /// Opens the script editor on the partner's active case, or the first
+    /// case that can be edited.
+    fn add_script(&mut self) {
+        let active = self.workspace.partners[self.partner].case_id();
+        let target = active
+            .and_then(|id| editable(&self.workspace).find(|c| c.id == id))
+            .or_else(|| editable(&self.workspace).next())
+            .cloned();
+        match target {
+            Some(c) => self.script_form = Some(ScriptForm::new(&c)),
+            None => self.fail("Create or duplicate a case first: scripts belong to cases."),
+        }
+    }
+
     pub(super) fn scripts(&mut self, ui: &mut Ui) {
         header_row(ui, |ui| {
             ui.heading("Scripts");
             if button(ui, "Add script", true).clicked() {
-                let active = self.workspace.partners[self.partner].case_id();
-                let target = active
-                    .and_then(|id| editable(&self.workspace).find(|c| c.id == id))
-                    .or_else(|| editable(&self.workspace).next())
-                    .cloned();
-                match target {
-                    Some(c) => self.script_form = Some(ScriptForm::new(&c)),
-                    None => {
-                        self.status =
-                            "Create or duplicate a case first: scripts belong to cases.".into();
-                    }
-                }
+                self.add_script();
             }
         });
         ui.add_space(GAP_XS);
@@ -413,6 +416,7 @@ impl Desktop {
         ));
         ui.add_space(GAP_S);
         let mut picked = None;
+        let mut add = false;
         ScrollArea::vertical().show(ui, |ui| {
             let mut any = false;
             for c in &self.workspace.cases {
@@ -450,13 +454,21 @@ impl Desktop {
                 }
             }
             if !any {
-                ui.label(muted(
-                    "No scripts yet. Add a script to run when a rule of a case matches.",
-                ));
+                empty_state(
+                    ui,
+                    "No scripts yet",
+                    "A script builds a reply from the incoming message, in JavaScript, when a rule of a case matches.",
+                    |ui| {
+                        add = button(ui, "Add script", true).clicked();
+                    },
+                );
             }
         });
         if let Some(b) = picked {
             self.edit_binding(b);
+        }
+        if add {
+            self.add_script();
         }
     }
 

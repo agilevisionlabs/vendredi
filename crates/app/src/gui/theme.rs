@@ -352,3 +352,16 @@ mod tests {
         }
     }
 }
+
+/// A page or list with nothing in it yet: what it is for and the next step.
+pub(super) fn empty_state(ui: &mut Ui, title: &str, text: &str, actions: impl FnOnce(&mut Ui)) {
+    ui.add_space(GAP_XL);
+    ui.vertical(|ui| {
+        ui.set_max_width(460.);
+        ui.label(RichText::new(title).font(bold(15.)));
+        ui.add_space(GAP_XS);
+        ui.label(RichText::new(text).color(SECONDARY_TEXT));
+        ui.add_space(GAP_M);
+        ui.horizontal(actions);
+    });
+}

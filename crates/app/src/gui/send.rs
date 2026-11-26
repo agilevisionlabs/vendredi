@@ -57,6 +57,26 @@ impl Desktop {
         self.status = "Send requested".into();
         Ok(())
     }
+    /// The URL a partner's HTTP intake listens on, if it has one.
+    pub(super) fn receive_url(&self, partner: usize) -> Option<String> {
+        let path = self.workspace.partners[partner]
+            .receive
+            .iter()
+            .find_map(|r| match r {
+                Receive::Http { path } => Some(path),
+                Receive::Folder { .. } => None,
+            })?;
+        let mut addr = self.address;
+        if addr.ip().is_unspecified() {
+            addr.set_ip(if addr.is_ipv4() {
+                std::net::Ipv4Addr::LOCALHOST.into()
+            } else {
+                std::net::Ipv6Addr::LOCALHOST.into()
+            });
+        }
+        Some(format!("http://{addr}{path}"))
+    }
+
     pub(super) fn sample(&self, partner: usize) -> Result<()> {
         let bytes = fs::read(self.root.join("order.edi"))?;
         let channels = &self.workspace.partners[partner].receive;
