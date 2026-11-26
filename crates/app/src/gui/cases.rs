@@ -9,6 +9,15 @@ use workspace_edit::FileEdit;
 
 type Preview = std::result::Result<(Vec<Incoming>, Vec<Change>), String>;
 
+type CheckResults = std::result::Result<Vec<(String, Vec<String>)>, String>;
+
+/// The case checks running in the background, or their last results.
+pub(super) struct Checks {
+    case: String,
+    pending: Option<mpsc::Receiver<CheckResults>>,
+    pub(super) results: Option<CheckResults>,
+}
+
 /// The Import cases dialog. Fetching runs off the UI thread.
 pub(super) struct ImportForm {
     source: String,
@@ -513,16 +522,46 @@ impl Desktop {
             ui.add_space(GAP_XS);
             ui.label(muted(format!("Acknowledgement: {policy:?}").to_lowercase()));
         }
-        if !c.samples.is_empty() || !c.initiate.is_empty() {
-            ui.add_space(GAP_M);
-            ui.separator();
-            ui.add_space(GAP_S);
-            section_row(ui, |ui| {
-                form::label(ui, "Try it");
-                if !active {
-                    ui.label(muted("Make the case active to send its samples."));
+        ui.add_space(GAP_M);
+        ui.separator();
+        ui.add_space(GAP_S);
+        section_row(ui, |ui| {
+            form::label(ui, "Try it");
+            if !active {
+                ui.label(muted("Make the case active to send its samples."));
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if c.source.is_none()
+                    && small_button(ui, &with_icon(icon::PLUS, "Add sample"))
+                        .on_hover_text("Choose a message the integration would send")
+                        .clicked()
+                {
+                    let folder = case::folder(&self.root, &c.id);
+                    if let Some(file) =
+                        form::pick_file(&folder, &[("EDI documents", &["edi", "x12", "txt"])])
+                        && let Err(e) = self.add_sample(c, &file)
+                    {
+                        self.fail(format!("{e:#}"));
+                    }
+                }
+                if !c.expect.is_empty() {
+                    let running = self.checks.as_ref().is_some_and(|k| k.case == c.id && k.pending.is_some());
+                    if ui
+                        .add_enabled(!running, styled(&with_icon(icon::CHECK_CIRCLE, "Run checks"), false, SMALL_BUTTON))
+                        .on_hover_text("Send each sample in a scratch workspace and compare the replies with the expected ones")
+                        .clicked()
+                    {
+                        self.run_checks(c);
+                    }
                 }
             });
+        });
+        self.check_results(ui, c);
+        if c.samples.is_empty() && c.initiate.is_empty() {
+            ui.label(muted(
+                "Samples are messages the integration would send. Add one to try the case with a click.",
+            ));
+        } else {
             ui.add_enabled_ui(active, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     for s in &c.samples {
@@ -545,6 +584,157 @@ impl Desktop {
                     }
                 });
             });
+            if c.source.is_none() && !c.samples.is_empty() {
+                let mut remove = None;
+                ui.horizontal_wrapped(|ui| {
+                    for s in &c.samples {
+                        if small_button(ui, &with_icon(icon::X, &format!("Remove {}", s.name)))
+                            .on_hover_text("Remove this sample and its expected replies")
+                            .clicked()
+                        {
+                            remove = Some(s.name.clone());
+                        }
+                    }
+                });
+                if let Some(sample) = remove
+                    && let Err(e) = self.remove_sample(c, &sample)
+                {
+                    self.fail(format!("{e:#}"));
+                }
+            }
+        }
+    }
+
+    /// Rewrites `case.json` of an editable case, offering Undo.
+    fn edit_case(&mut self, c: &Case, what: &str, change: impl FnOnce(&mut Case)) -> Result<()> {
+        ensure!(
+            c.source.is_none(),
+            "This case was imported. Duplicate it to change it."
+        );
+        let path = case::folder(&self.root, &c.id).join(case::FILE);
+        let before = fs::read(&path)?;
+        let mut case = Case::parse(&before)?;
+        change(&mut case);
+        let after = case::to_json(&case)?;
+        self.apply_files(&[FileEdit {
+            path: &path,
+            before: Some(&before),
+            after: after.as_bytes(),
+        }])?;
+        self.undoable(what.to_owned(), toast::Undo::Files(vec![(path, before)]));
+        Ok(())
+    }
+
+    fn add_sample(&mut self, c: &Case, file: &Path) -> Result<()> {
+        let folder = case::folder(&self.root, &c.id);
+        // A sample is one message, checked before it joins the case.
+        vendredi_core::interchange::document(c.standard, &fs::read(file)?).with_context(|| {
+            format!(
+                "{} is not a single {} message",
+                file.display(),
+                c.standard.label()
+            )
+        })?;
+        let inside = form::into_folder(&folder, file)?;
+        let stem = inside
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Sample".into());
+        let mut name = stem.clone();
+        for n in 2.. {
+            if !c.samples.iter().any(|s| s.name == name) {
+                break;
+            }
+            name = format!("{stem} {n}");
+        }
+        let sample = case::Sample {
+            name: name.clone(),
+            document: inside,
+        };
+        self.edit_case(c, &format!("Added sample {name}"), |case| {
+            case.samples.push(sample)
+        })
+    }
+
+    fn remove_sample(&mut self, c: &Case, name: &str) -> Result<()> {
+        // Expectations on the sample go with it.
+        self.edit_case(c, &format!("Removed sample {name}"), |case| {
+            case.samples.retain(|s| s.name != name);
+            case.expect.retain(|e| e.sample.as_deref() != Some(name));
+        })
+    }
+
+    fn run_checks(&mut self, c: &Case) {
+        let folder = case::folder(&self.root, &c.id);
+        let (tx, rx) = mpsc::channel();
+        let out = self.output.clone();
+        thread::spawn(move || {
+            let result = case::Bundle::load(&folder)
+                .and_then(|b| vendredi_core::selftest::run(&b))
+                .map(|outcomes| {
+                    outcomes
+                        .into_iter()
+                        .map(|o| (o.check, o.failures))
+                        .collect()
+                })
+                .map_err(|e| format!("{e:#}"));
+            let _ = tx.send(result);
+            out(json!({"event":"checks_ready"}));
+        });
+        self.checks = Some(Checks {
+            case: c.id.clone(),
+            pending: Some(rx),
+            results: None,
+        });
+    }
+
+    /// Collects finished checks from the background thread.
+    pub(super) fn poll_checks(&mut self) {
+        if let Some(k) = &mut self.checks
+            && let Some(result) = k.pending.as_ref().and_then(|rx| rx.try_recv().ok())
+        {
+            k.pending = None;
+            k.results = Some(result);
+        }
+    }
+
+    /// The outcome of the last checks of this case, one line each.
+    fn check_results(&mut self, ui: &mut Ui, c: &Case) {
+        let Some(k) = &mut self.checks else {
+            return;
+        };
+        if k.case != c.id {
+            return;
+        }
+        if k.pending.is_some() {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(muted("Running the case's checks…"));
+            });
+            return;
+        }
+        match &k.results {
+            Some(Ok(outcomes)) => {
+                for (check, failures) in outcomes {
+                    let (mark, color) = if failures.is_empty() {
+                        (icon::CHECK_CIRCLE, col::green())
+                    } else {
+                        (icon::WARNING_CIRCLE, col::amber())
+                    };
+                    let line = ui.label(
+                        RichText::new(format!("{mark} {check}"))
+                            .size(ty::SMALL)
+                            .color(color),
+                    );
+                    if !failures.is_empty() {
+                        line.on_hover_text(failures.join("\n"));
+                    }
+                }
+            }
+            Some(Err(e)) => {
+                ui.colored_label(col::amber(), e);
+            }
+            None => {}
         }
     }
 
@@ -899,6 +1089,84 @@ mod tests {
                 .to_string()
                 .contains("different reply.edi")
         );
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "opens a local workspace listener"]
+    fn samples_are_added_removed_and_checked() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let (mut app, ctx) = open(dir.path())?;
+        click(&mut app, &ctx, "Cases")?;
+        click(&mut app, &ctx, &with_icon(icon::CHECK_CIRCLE, "Run checks"))?;
+        wait_for(&mut app, "checks", |a| {
+            a.checks.as_ref().is_some_and(|k| k.results.is_some())
+        })?;
+        // The results show on the next frame; the starter case passes.
+        crate::gui::tests::frame(&mut app, &ctx, vec![]);
+        let Some(Ok(results)) = &app.checks.as_ref().unwrap().results else {
+            panic!("checks failed to run");
+        };
+        assert!(
+            !results.is_empty() && results.iter().all(|(_, f)| f.is_empty()),
+            "{results:?}"
+        );
+        let c = app
+            .workspace
+            .cases
+            .iter()
+            .find(|c| c.id == "confirm-orders")
+            .unwrap()
+            .clone();
+        // Only single messages of the case's standard can be samples.
+        let bad = dir.path().join("bad.edi");
+        fs::write(&bad, "not edi")?;
+        assert!(app.add_sample(&c, &bad).is_err());
+        let order = dir.path().join("big-order.edi");
+        fs::write(&order, "UNH+1+ORDERS:D:96A:UN'BGM+220+PO9+9'UNT+3+1'")?;
+        app.add_sample(&c, &order)?;
+        let c = app
+            .workspace
+            .cases
+            .iter()
+            .find(|c| c.id == "confirm-orders")
+            .unwrap()
+            .clone();
+        assert_eq!(
+            c.samples
+                .iter()
+                .map(|s| s.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Order", "big-order"]
+        );
+        assert!(
+            case::folder(dir.path(), "confirm-orders")
+                .join("big-order.edi")
+                .is_file()
+        );
+        app.remove_sample(&c, "Order")?;
+        let c = app
+            .workspace
+            .cases
+            .iter()
+            .find(|c| c.id == "confirm-orders")
+            .unwrap()
+            .clone();
+        assert_eq!(c.samples.len(), 1);
+        // Its expectation went with it, so the case still loads.
+        assert!(
+            c.expect
+                .iter()
+                .all(|e| e.sample.as_deref() != Some("Order"))
+        );
+        click(&mut app, &ctx, "Undo")?;
+        let c = app
+            .workspace
+            .cases
+            .iter()
+            .find(|c| c.id == "confirm-orders")
+            .unwrap();
+        assert_eq!(c.samples.len(), 2);
         Ok(())
     }
 

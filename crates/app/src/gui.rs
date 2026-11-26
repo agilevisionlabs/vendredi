@@ -174,6 +174,7 @@ struct Desktop {
     case: String,
     import: Option<cases::ImportForm>,
     case_form: Option<cases::CaseForm>,
+    checks: Option<cases::Checks>,
     /// Set by ⌘F; the search field takes the keyboard when it is next drawn.
     focus_search: bool,
     /// Shown as toasts: the last status already shown, whether the next
@@ -259,6 +260,7 @@ impl Desktop {
             case: String::new(),
             import: None,
             case_form: None,
+            checks: None,
             focus_search: false,
             toasted: String::new(),
             status_error: !listening,
@@ -348,6 +350,7 @@ impl Desktop {
                     self.case_switched(&v);
                 }
                 "import_ready" => self.poll_import(),
+                "checks_ready" => self.poll_checks(),
                 _ => {
                     refresh = true;
                     if let Some(error) = v["error"].as_str() {
