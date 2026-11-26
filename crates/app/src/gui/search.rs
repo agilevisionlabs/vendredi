@@ -41,7 +41,7 @@ impl Desktop {
                 self.highlight = Some((query.to_owned(), pattern));
                 self.reveal_match = true;
             }
-            Err(e) => self.status = e.to_string(),
+            Err(e) => self.fail(e.to_string()),
         }
     }
 

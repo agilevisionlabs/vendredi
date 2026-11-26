@@ -14,6 +14,7 @@ mod send;
 mod settings;
 mod shortcuts;
 mod theme;
+mod toast;
 mod window;
 mod workspace_edit;
 use crate::runtime::{self, Command, Running};
@@ -50,6 +51,11 @@ pub fn run(root: PathBuf) -> Result<()> {
         opts,
         Box::new(move |cc| {
             let mut session = Session::open(root, &cc.egui_ctx);
+            // AppKit menus belong to the main thread, where eframe calls this.
+            #[cfg(target_os = "macos")]
+            {
+                session._menu = menu::install(&cc.egui_ctx).ok();
+            }
             if let (Some(storage), Ok(app)) = (cc.storage, &mut session.desktop) {
                 app.restore(storage.get_string(&place_key(&app.root)).as_deref());
             }
@@ -73,7 +79,7 @@ impl Session {
             root,
             desktop,
             #[cfg(target_os = "macos")]
-            _menu: menu::install(ctx).ok(),
+            _menu: None,
         }
     }
     fn show(&mut self, ctx: &egui::Context) {
@@ -207,7 +213,6 @@ struct Desktop {
     send_script: bool,
     send_error: String,
     partner_form: Option<partners::PartnerForm>,
-    partner_removal: Option<partners::PartnerRemoval>,
     cleanup: Option<history::Cleanup>,
     script_form: Option<scripts::ScriptForm>,
     rule_form: Option<rules::RuleForm>,
@@ -221,6 +226,13 @@ struct Desktop {
     case_form: Option<cases::CaseForm>,
     /// Set by ⌘F; the search field takes the keyboard when it is next drawn.
     focus_search: bool,
+    /// Shown as toasts: the last status already shown, whether the next
+    /// status is an error, and the undo for the next one.
+    toasted: String,
+    status_error: bool,
+    pending_undo: Option<toast::Undo>,
+    toast_list: Vec<toast::Toast>,
+    toast_count: u64,
     send_file: String,
     function: String,
     config_source: String,
@@ -280,7 +292,6 @@ impl Desktop {
             send_script: false,
             send_error: String::new(),
             partner_form: None,
-            partner_removal: None,
             cleanup: None,
             script_form: None,
             rule_form: None,
@@ -292,6 +303,11 @@ impl Desktop {
             import: None,
             case_form: None,
             focus_search: false,
+            toasted: String::new(),
+            status_error: false,
+            pending_undo: None,
+            toast_list: Vec::new(),
+            toast_count: 0,
             send_file: String::new(),
             function: String::new(),
             edit_file,
@@ -365,13 +381,13 @@ impl Desktop {
                         self.address = addr;
                     }
                 }
-                "error" => self.status = v["error"].as_str().unwrap_or("Command failed").into(),
+                "error" => self.fail(v["error"].as_str().unwrap_or("Command failed")),
                 "case_switched" => self.case_switched(&v),
                 "import_ready" => self.poll_import(),
                 _ => {
                     refresh = true;
                     if let Some(error) = v["error"].as_str() {
-                        self.status = error.into();
+                        self.fail(error);
                     }
                 }
             }
@@ -740,7 +756,6 @@ send = { directory = "freight-out" }
         }
         app.navigate(View::Partner(0));
         click(&mut app, &ctx, "Remove partner")?;
-        click(&mut app, &ctx, "Confirm removal")?;
         click(&mut app, &ctx, "Clear history…")?;
         click(&mut app, &ctx, "Cancel")?;
         assert_eq!(app.transfers.len(), 2);

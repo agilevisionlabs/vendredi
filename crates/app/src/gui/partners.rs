@@ -447,57 +447,23 @@ fn resolved_path(ui: &mut Ui, path: &Path, root: &Path) {
     }
 }
 
-pub(super) struct PartnerRemoval {
-    index: usize,
-    error: String,
-}
-impl PartnerRemoval {
-    pub(super) fn new(index: usize) -> Self {
-        Self {
-            index,
-            error: String::new(),
-        }
-    }
-}
-
 impl Desktop {
-    fn remove_partner(&mut self, index: usize) -> Result<()> {
+    /// Removes a partner at once; the toast offers Undo. Its traffic and
+    /// cases stay.
+    pub(super) fn remove_partner(&mut self, index: usize) -> Result<()> {
+        let before = self.config_source.clone();
+        let name = self.workspace.partners[index].name.clone();
         let mut doc: DocumentMut = self.config_source.parse()?;
         let list = tables(doc.as_table_mut(), "partners")?;
         ensure!(list.len() > 1, "The workspace needs at least one partner.");
         list.remove(index);
         self.save_configuration(doc.to_string(), None)?;
         self.navigate(View::All);
-        self.status = "Partner removed".into();
+        self.undoable(
+            format!("Removed partner {name}"),
+            toast::Undo::Files(vec![(self.root.join("vendredi.toml"), before.into_bytes())]),
+        );
         Ok(())
-    }
-
-    pub(super) fn partner_removal_dialog(&mut self, ctx: &egui::Context) {
-        let Some(mut removal) = self.partner_removal.take() else {
-            return;
-        };
-        let mut close = false;
-        let escaped = form::modal(ctx, "remove partner", "Remove partner?", 400., |ui| {
-            let name = &self.workspace.partners[removal.index].name;
-            ui.label(format!(
-                "Remove {name} from this workspace? Its cases stay installed."
-            ));
-            if !removal.error.is_empty() {
-                ui.colored_label(AMBER, &removal.error);
-            }
-            form::footer(ui, |ui| {
-                if ui.add(form::removal_button("Confirm removal")).clicked() {
-                    match self.remove_partner(removal.index) {
-                        Ok(()) => close = true,
-                        Err(e) => removal.error = format!("{e:#}"),
-                    }
-                }
-                close |= button(ui, "Cancel", false).clicked();
-            });
-        });
-        if !close && !escaped {
-            self.partner_removal = Some(removal);
-        }
     }
 
     pub(super) fn open_partner(&mut self, index: Option<usize>) {
@@ -619,17 +585,18 @@ mod tests {
         assert!(fs::read_to_string(&config)?.starts_with("# keep this comment"));
         click(&mut app, &ctx, "Remove partner")?;
         assert!(app.partner_form.is_none());
-        assert!(app.partner_removal.is_some());
-        click(&mut app, &ctx, "Cancel")?;
+        assert_eq!(Workspace::load(dir.path())?.partners.len(), 1);
+        click(&mut app, &ctx, "Undo")?;
         assert_eq!(Workspace::load(dir.path())?.partners.len(), 2);
+        assert_eq!(app.workspace.partners.len(), 2);
+        click(&mut app, &ctx, "Supplier East")?;
         click(&mut app, &ctx, "Remove partner")?;
-        click(&mut app, &ctx, "Confirm removal")?;
         let w = Workspace::load(dir.path())?;
         assert_eq!(w.partners.len(), 1);
         assert_eq!(w.partners[0].name, "North Freight");
         click(&mut app, &ctx, "North Freight")?;
-        click(&mut app, &ctx, "Remove partner")?;
-        assert!(app.partner_removal.is_none());
+        // The last partner cannot be removed.
+        assert!(app.remove_partner(0).is_err());
         Ok(())
     }
 

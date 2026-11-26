@@ -334,7 +334,7 @@ impl Desktop {
         f.binding = Some(binding);
         match f.load(&self.root) {
             Ok(()) => self.script_form = Some(f),
-            Err(e) => self.status = format!("{e:#}"),
+            Err(e) => self.fail(format!("{e:#}")),
         }
     }
 

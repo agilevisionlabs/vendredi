@@ -6,6 +6,7 @@ impl Desktop {
         self.drain();
         self.shortcuts(ctx);
         self.file_drops(ctx);
+        self.toasts(ctx);
         let count = self.transfers.values().filter(|t| self.visible(t)).count();
         let attention = self.transfers.values().filter(|t| t.attention).count();
         TopBottomPanel::bottom("footer")
@@ -21,19 +22,22 @@ impl Desktop {
                         "{count} transfer{} shown",
                         if count == 1 { "" } else { "s" }
                     )));
-                    ui.add_space(GAP_S);
-                    ui.label(
-                        RichText::new(format!("{attention} need attention"))
-                            .size(12.)
-                            .color(if attention > 0 { AMBER } else { MUTED }),
-                    );
-                    if !self.status.is_empty() {
-                        ui.add(Label::new(muted(&self.status)).truncate())
-                            .on_hover_text(&self.status);
-                    }
-                    if self.status.is_empty() && ui.available_width() > 240. {
+                    // Messages appear as toasts, and the sidebar counts what
+                    // needs attention, so the footer only places the workspace.
+                    if ui.available_width() > 240. {
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            ui.label(muted(".vendredi/vendredi.db").monospace());
+                            if ui
+                                .add(
+                                    Label::new(muted(self.root.display().to_string()).monospace())
+                                        .truncate()
+                                        .sense(Sense::click()),
+                                )
+                                .on_hover_text("Show the workspace in Finder")
+                                .on_hover_cursor(CursorIcon::PointingHand)
+                                .clicked()
+                            {
+                                self.perform(shortcuts::Do::Reveal);
+                            }
                         });
                     }
                 });
@@ -404,7 +408,7 @@ impl Desktop {
                                 && ui.link("Send sample order").clicked()
                                 && let Err(e) = self.sample(self.partner)
                             {
-                                self.status = e.to_string();
+                                self.fail(e.to_string());
                             }
                         } else {
                             ui.label(muted("No matching transfers."));
@@ -430,7 +434,6 @@ impl Desktop {
         self.send_window(ctx);
         self.cleanup_dialog(ctx);
         self.partner_dialog(ctx);
-        self.partner_removal_dialog(ctx);
         self.script_dialog(ctx);
         self.rule_dialog(ctx);
         self.import_dialog(ctx);
@@ -511,8 +514,9 @@ impl Desktop {
                     .add_enabled(can_remove, form::removal_button("Remove partner"))
                     .on_disabled_hover_text("The workspace needs at least one partner.")
                     .clicked()
+                    && let Err(e) = self.remove_partner(i)
                 {
-                    self.partner_removal = Some(partners::PartnerRemoval::new(i));
+                    self.fail(format!("{e:#}"));
                 }
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {

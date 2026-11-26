@@ -70,7 +70,6 @@ impl Desktop {
     pub(super) fn dialog_open(&self) -> bool {
         self.send_dialog
             || self.partner_form.is_some()
-            || self.partner_removal.is_some()
             || self.cleanup.is_some()
             || self.script_form.is_some()
             || self.rule_form.is_some()

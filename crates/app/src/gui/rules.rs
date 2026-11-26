@@ -358,57 +358,47 @@ impl Desktop {
             return;
         };
         let mut close = false;
-        let title = if f.removing {
-            "Remove rule?"
-        } else if f.index.is_some() {
+        let title = if f.index.is_some() {
             "Edit rule"
         } else {
             "Add rule"
         };
         let escaped = form::modal(ctx, "rule editor", title, 510., |ui| {
-            if f.removing {
-                ui.label(format!("Remove {} from case {}?", f.rule.name, f.case));
-            } else {
-                ScrollArea::vertical()
-                    .max_height((ctx.content_rect().height() - 220.).max(100.))
-                    .show(ui, |ui| f.fields(ui));
-            }
+            ScrollArea::vertical()
+                .max_height((ctx.content_rect().height() - 220.).max(100.))
+                .show(ui, |ui| f.fields(ui));
             if !f.error.is_empty() {
                 ui.colored_label(AMBER, &f.error);
             }
             form::footer(ui, |ui| {
-                let apply = if f.removing {
-                    ui.add(form::removal_button("Confirm removal"))
-                } else {
-                    button(ui, "Save rule", true)
-                };
-                if apply.clicked() {
-                    match f.save(self) {
-                        Ok(()) => {
-                            self.status = if f.removing {
-                                "Rule removed"
-                            } else {
-                                "Rule saved"
-                            }
-                            .into();
-                            close = true;
-                        }
-                        Err(e) => f.error = format!("{e:#}"),
-                    }
-                }
+                let save = button(ui, "Save rule", true).clicked();
                 if button(ui, "Cancel", false).clicked() {
                     close = true;
                 }
-                if !f.removing
-                    && f.index.is_some()
+                // Removing is immediate; the toast offers Undo.
+                f.removing = f.index.is_some()
                     && ui
                         .with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                             ui.link("Remove rule")
                         })
                         .inner
-                        .clicked()
-                {
-                    f.removing = true;
+                        .clicked();
+                if save || f.removing {
+                    match f.save(self) {
+                        Ok(()) if f.removing => {
+                            let file = f.folder.join(case::FILE);
+                            self.undoable(
+                                format!("Removed rule {}", f.rule.name),
+                                toast::Undo::Files(vec![(file, f.original.clone())]),
+                            );
+                            close = true;
+                        }
+                        Ok(()) => {
+                            self.status = "Rule saved".into();
+                            close = true;
+                        }
+                        Err(e) => f.error = format!("{e:#}"),
+                    }
                 }
             });
         });
@@ -478,8 +468,11 @@ mod tests {
         assert_eq!(saved[1].version.as_deref(), Some("D96A"));
         click(&mut app, &ctx, "Audit orders")?;
         click(&mut app, &ctx, "Remove rule")?;
-        click(&mut app, &ctx, "Confirm removal")?;
         assert_eq!(rules(dir.path())?.len(), 1);
+        // The toast takes the removal back.
+        click(&mut app, &ctx, "Undo")?;
+        assert_eq!(rules(dir.path())?.len(), 2);
+        assert_eq!(app.workspace.partners[0].scenario().len(), 2);
         // Imported cases are replaced by the next import, so they are not edited.
         fs::write(
             case::folder(dir.path(), "confirm-orders").join(vendredi_core::import::SOURCE_FILE),

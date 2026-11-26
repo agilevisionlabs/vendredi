@@ -163,10 +163,9 @@ impl Desktop {
     }
 }
 
-/// The New case and Delete case dialogs.
+/// The New case dialog.
 pub(super) enum CaseForm {
     New { name: String, error: String },
-    Delete { id: String, error: String },
 }
 
 impl Desktop {
@@ -189,8 +188,8 @@ impl Desktop {
                 self.partner = self.partner.min(self.workspace.partners.len() - 1);
                 self.status = format!("{partner} now uses case {to}");
             }
-            (Err(e), _) => self.status = format!("Reloading the workspace: {e:#}"),
-            (_, Err(e)) => self.status = format!("Reading vendredi.toml: {e:#}"),
+            (Err(e), _) => self.fail(format!("Reloading the workspace: {e:#}")),
+            (_, Err(e)) => self.fail(format!("Reading vendredi.toml: {e:#}")),
         }
     }
 
@@ -421,7 +420,7 @@ impl Desktop {
                 self.status = format!("Copied {} to {id}", c.id);
                 self.case = id;
             }
-            Err(e) => self.status = format!("Copying {}: {e:#}", c.id),
+            Err(e) => self.fail(format!("Copying {}: {e:#}", c.id)),
         }
     }
 
@@ -455,10 +454,11 @@ impl Desktop {
                     ))
                     .clicked()
                 {
-                    self.case_form = Some(CaseForm::Delete {
-                        id: c.id.clone(),
-                        error: String::new(),
-                    });
+                    // Deleting is immediate; the toast offers Undo.
+                    match self.delete_case(&c.id) {
+                        Ok(()) => self.case.clear(),
+                        Err(e) => self.fail(format!("{e:#}")),
+                    }
                 }
                 if button(ui, "Duplicate", false)
                     .on_hover_text("Copy this case, with its files, to change it")
@@ -554,8 +554,28 @@ impl Desktop {
             "{id} is active for {}. Make another case active first.",
             users.join(", ")
         );
-        fs::remove_dir_all(case::folder(&self.root, id))?;
-        self.apply_files(&[])
+        // The folder is set aside, not removed, so the deletion can be undone.
+        let folder = case::folder(&self.root, id);
+        let trash = self.root.join(".vendredi/trash");
+        fs::create_dir_all(&trash)?;
+        let aside = tempfile::Builder::new()
+            .prefix(&format!("{id}-"))
+            .tempdir_in(&trash)?
+            .keep();
+        fs::remove_dir(&aside)?;
+        fs::rename(&folder, &aside)?;
+        if let Err(e) = self.apply_files(&[]) {
+            fs::rename(&aside, &folder)?;
+            return Err(e);
+        }
+        self.undoable(
+            format!("Deleted case {id}"),
+            toast::Undo::Folder {
+                from: aside,
+                to: folder,
+            },
+        );
+        Ok(())
     }
 
     pub(super) fn case_dialog(&mut self, ctx: &egui::Context) {
@@ -565,7 +585,6 @@ impl Desktop {
         let mut close = false;
         let title = match &f {
             CaseForm::New { .. } => "New case",
-            CaseForm::Delete { .. } => "Delete case?",
         };
         let escaped = form::modal(ctx, "case editor", title, 480., |ui| match &mut f {
             CaseForm::New { name, error } => {
@@ -590,29 +609,6 @@ impl Desktop {
                             Ok(id) => {
                                 self.status = format!("Created case {id}");
                                 self.case = id;
-                                close = true;
-                            }
-                            Err(e) => *error = format!("{e:#}"),
-                        }
-                    }
-                    if button(ui, "Cancel", false).clicked() {
-                        close = true;
-                    }
-                });
-            }
-            CaseForm::Delete { id, error } => {
-                ui.label(format!(
-                    "Delete cases/{id} with its rules, documents and scripts? This cannot be undone."
-                ));
-                if !error.is_empty() {
-                    ui.colored_label(AMBER, error.as_str());
-                }
-                form::footer(ui, |ui| {
-                    if ui.add(form::removal_button("Delete case")).clicked() {
-                        match self.delete_case(id) {
-                            Ok(()) => {
-                                self.status = format!("Deleted case {id}");
-                                self.case.clear();
                                 close = true;
                             }
                             Err(e) => *error = format!("{e:#}"),
@@ -777,8 +773,18 @@ mod tests {
             "Confirm every order (copy)"
         );
         click(&mut app, &ctx, "Delete")?;
-        click(&mut app, &ctx, "Delete case")?;
-        assert!(app.case_form.is_none());
+        assert!(!copy.exists());
+        assert_eq!(app.status, "Deleted case confirm-every-order-copy");
+        click(&mut app, &ctx, "Undo")?;
+        assert!(copy.join("confirm.js").is_file());
+        assert!(
+            app.workspace
+                .cases
+                .iter()
+                .any(|c| c.id == "confirm-every-order-copy")
+        );
+        click(&mut app, &ctx, "Confirm every order (copy)")?;
+        click(&mut app, &ctx, "Delete")?;
         assert!(!copy.exists());
         assert!(
             app.workspace
