@@ -515,8 +515,81 @@ pub fn envelope(
     }
 }
 
+/// What a script would do with an interchange: its log lines, the messages
+/// it would send, and whether it asked for an acknowledgement. Nothing is
+/// stored or sent; partner state starts empty.
+pub struct Trial {
+    pub logs: Vec<String>,
+    pub messages: Vec<String>,
+    pub acknowledge: bool,
+}
+
+pub fn try_script(
+    standard: Standard,
+    raw: &[u8],
+    source: &str,
+    function: &str,
+    now: i64,
+) -> Result<Trial> {
+    let parsed = parse(raw);
+    let first = parsed
+        .interchanges
+        .first()
+        .context("the message is not an interchange Vendredi can read")?;
+    let effects = crate::script::run(
+        source,
+        function,
+        &crate::script::Input {
+            interchange: &first.view(),
+            legacy: first.legacy(),
+            state: &Default::default(),
+            reference: 0,
+            now,
+        },
+    )?;
+    let messages = effects
+        .sends
+        .iter()
+        .enumerate()
+        .map(|(n, send)| {
+            let message = match send {
+                Value::String(raw) if standard == Standard::Edifact => {
+                    edi::script_document(raw).map(Outgoing::Edifact)
+                }
+                Value::String(_) => bail!("send a message from api.build to an X12 partner"),
+                other => contract::built(other, standard),
+            };
+            message
+                .and_then(|m| m.text())
+                .with_context(|| format!("script send {}", n + 1))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Trial {
+        logs: effects.logs,
+        messages,
+        acknowledge: effects.acknowledge,
+    })
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn scripts_can_be_tried_on_a_message() -> Result<()> {
+        let order = include_bytes!("../../../examples/orders/order.edi");
+        let source = "function reply(i, api) { const m = i.groups[0].messages[0]; api.log('got ' + m.type); api.send(api.build('ORDRSP', m.version, [['BGM', '231', 'X', '29']])); api.ack(); }";
+        let trial = try_script(Standard::Edifact, order, source, "reply", 0)?;
+        assert_eq!(trial.logs, ["got ORDERS"]);
+        assert_eq!(trial.messages.len(), 1);
+        assert!(
+            trial.messages[0].contains("BGM+231+X+29'"),
+            "{:?}",
+            trial.messages
+        );
+        assert!(trial.acknowledge);
+        assert!(try_script(Standard::Edifact, b"nonsense", source, "reply", 0).is_err());
+        Ok(())
+    }
+
     use super::*;
 
     #[test]

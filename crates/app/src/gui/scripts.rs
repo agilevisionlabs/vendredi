@@ -27,6 +27,15 @@ pub(super) struct ScriptForm {
     pub(super) error: String,
     confirm_detach: bool,
     check: code_editor::Check,
+    /// The last trial on a received message: what the script logged and sent.
+    pub(super) trial: Option<std::result::Result<vendredi_core::interchange::Trial, String>>,
+}
+
+/// A received message to try a script on: its label, standard and bytes.
+pub(super) struct Sample {
+    label: String,
+    standard: vendredi_core::config::Standard,
+    bytes: Vec<u8>,
 }
 
 /// Cases whose files the editors may change: imported cases are replaced by
@@ -56,6 +65,7 @@ impl ScriptForm {
             error: String::new(),
             confirm_detach: false,
             check: code_editor::Check::default(),
+            trial: None,
         }
     }
 
@@ -311,7 +321,95 @@ impl ScriptForm {
     }
 }
 
+impl ScriptForm {
+    /// Runs the script on the received message selected in the traffic
+    /// list and shows what it would log and send, without sending.
+    fn try_it(&mut self, ui: &mut Ui, sample: Option<&Sample>) {
+        ui.add_space(GAP_S);
+        section_row(ui, |ui| {
+            form::label(ui, "Try it");
+            match sample {
+                Some(s) => {
+                    if small_button(ui, &with_icon(icon::PLAY, &format!("Run on {}", s.label)))
+                        .on_hover_text("Runs the script on this message. Nothing is sent or saved.")
+                        .clicked()
+                    {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map_or(0, |d| d.as_millis() as i64);
+                        self.trial = Some(
+                            vendredi_core::interchange::try_script(
+                                s.standard,
+                                &s.bytes,
+                                &self.source,
+                                &self.function,
+                                now,
+                            )
+                            .map_err(|e| format!("{e:#}")),
+                        );
+                    }
+                }
+                None => {
+                    ui.label(muted(
+                        "Select a received message in the traffic list to run the script on it.",
+                    ));
+                }
+            }
+        });
+        match &self.trial {
+            Some(Ok(t)) => {
+                if t.logs.is_empty() && t.messages.is_empty() && !t.acknowledge {
+                    ui.label(muted("The script ran and did nothing."));
+                }
+                for line in &t.logs {
+                    ui.label(muted(format!("log  {line}")).monospace());
+                }
+                if t.acknowledge {
+                    ui.label(muted("asks for the acknowledgement").monospace());
+                }
+                for m in &t.messages {
+                    ui.label(egui::RichText::new(format!("send {m}")).font(ty::code()));
+                }
+            }
+            Some(Err(e)) => {
+                ui.colored_label(col::amber(), e);
+            }
+            None => {}
+        }
+    }
+}
+
 impl Desktop {
+    /// The received message selected in the traffic list, if its bytes are
+    /// loaded.
+    fn selected_sample(&self) -> Option<Sample> {
+        let t = self.transfers.get(&self.selected?)?;
+        if t.outgoing || self.detail["transfer"].as_i64() != Some(t.id) {
+            return None;
+        }
+        let bytes: Vec<u8> = self.detail["bytes"]
+            .as_array()?
+            .iter()
+            .filter_map(|b| b.as_u64().and_then(|b| u8::try_from(b).ok()))
+            .collect();
+        let standard = self
+            .workspace
+            .partners
+            .iter()
+            .find(|p| p.name == t.partner)?
+            .standard;
+        let label = if t.kind.is_empty() {
+            "the selected message".to_owned()
+        } else {
+            format!("{} {}", t.kind, t.reference)
+        };
+        Some(Sample {
+            label,
+            standard,
+            bytes,
+        })
+    }
+
     fn edit_binding(&mut self, binding: Binding) {
         let Some(c) = find(&self.workspace, &binding.case).cloned() else {
             return;
@@ -473,6 +571,7 @@ impl Desktop {
             return;
         };
         let mut close = false;
+        let sample = self.selected_sample();
         let title = if f.confirm_detach {
             "Detach script?"
         } else if f.binding.is_some() {
@@ -489,7 +588,10 @@ impl Desktop {
             } else {
                 ScrollArea::vertical()
                     .max_height((ctx.content_rect().height() - 220.).max(100.))
-                    .show(ui, |ui| f.fields(ui, &self.workspace));
+                    .show(ui, |ui| {
+                        f.fields(ui, &self.workspace);
+                        f.try_it(ui, sample.as_ref());
+                    });
             }
             if !f.error.is_empty() {
                 ui.colored_label(col::amber(), &f.error);
@@ -539,6 +641,55 @@ impl Desktop {
 mod tests {
     use super::*;
     use crate::gui::tests::{click, wait_for};
+
+    #[test]
+    #[ignore = "opens a local workspace listener"]
+    fn a_script_runs_on_the_selected_message_without_sending() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        crate::sample(dir.path())?;
+        let file = dir.path().join("vendredi.toml");
+        fs::write(&file, fs::read_to_string(&file)?.replace(":8180", ":0"))?;
+        let ctx = egui::Context::default();
+        ctx.data_mut(|d| {
+            d.insert_temp(egui::Id::new("test screen size"), egui::vec2(1440., 1000.))
+        });
+        let mut app = Desktop::open(dir.path().into(), &ctx)?;
+        click(&mut app, &ctx, "Send sample order")?;
+        wait_for(&mut app, "replies", |a| {
+            a.transfers
+                .values()
+                .filter(|t| t.outgoing && t.status == "Delivered")
+                .count()
+                == 2
+        })?;
+        let order = app.transfers.values().find(|t| !t.outgoing).unwrap().id;
+        app.select(order);
+        wait_for(&mut app, "inspection", |a| a.detail["transfer"] == order)?;
+        let sent = app.transfers.len();
+        // Several starter cases have a confirm.js; open the active case's.
+        app.edit_script_link(
+            Path::new("cases/confirm-orders/confirm.js"),
+            "Supplier",
+            None,
+        );
+        click(
+            &mut app,
+            &ctx,
+            &with_icon(icon::PLAY, "Run on ORDERS ORDER42"),
+        )?;
+        let trial = app.script_form.as_ref().unwrap().trial.as_ref().unwrap();
+        let trial = trial.as_ref().map_err(|e| anyhow!("{e}"))?;
+        assert_eq!(trial.logs, ["Confirming PO42"]);
+        assert!(
+            trial.messages[0].starts_with("UNH+1+ORDRSP"),
+            "{:?}",
+            trial.messages
+        );
+        // Nothing was sent.
+        wait_for(&mut app, "quiet", |_| true)?;
+        assert_eq!(app.transfers.len(), sent);
+        Ok(())
+    }
 
     #[test]
     #[ignore = "uses a local listener and folder watcher"]
