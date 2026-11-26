@@ -34,6 +34,8 @@ pub(super) enum Do {
     Report,
     OpenWorkspace,
     NewWorkspace,
+    /// Only the macOS menu bar offers this.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     CloseWorkspace,
 }
 
@@ -50,18 +52,26 @@ pub(super) fn open_externally(target: &str, reveal: bool) {
         }
         c
     };
+    // Explorer takes "/select,<path>" as one argument.
     #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut c = std::process::Command::new("explorer");
-        if reveal {
-            c.arg("/select,");
-        }
-        c
+    let mut command = std::process::Command::new("explorer");
+    #[cfg(target_os = "windows")]
+    let target = &if reveal {
+        format!("/select,{target}")
+    } else {
+        target.to_owned()
     };
+    // xdg-open has no reveal; showing a file means opening its folder.
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let mut command = {
-        let _ = reveal;
-        std::process::Command::new("xdg-open")
+    let mut command = std::process::Command::new("xdg-open");
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let target = if reveal {
+        std::path::Path::new(target)
+            .parent()
+            .and_then(|p| p.to_str())
+            .unwrap_or(target)
+    } else {
+        target
     };
     let _ = command.arg(target).spawn();
 }
