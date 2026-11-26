@@ -220,7 +220,7 @@ impl Desktop {
             // A button of the row's height opens the partner menu, so the
             // picker matches the other buttons in size and centre line.
             let current = self.workspace.partners[self.partner].name.clone();
-            let picker = button(ui, &format!("{current}  ⏷"), false);
+            let picker = button(ui, &format!("{current}  {}", icon::CARET_DOWN), false);
             egui::Popup::menu(&picker).show(|ui| {
                 for (i, p) in self.workspace.partners.iter().enumerate() {
                     if ui.selectable_label(i == self.partner, &p.name).clicked() {
@@ -230,14 +230,21 @@ impl Desktop {
                 }
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if button(ui, "Import cases…", false)
-                    .on_hover_text("Import cases from a folder, a JSON file or an https:// URL")
-                    .clicked()
+                if button(
+                    ui,
+                    &with_icon(icon::DOWNLOAD_SIMPLE, "Import cases…"),
+                    false,
+                )
+                .on_hover_text("Import cases from a folder, a JSON file or an https:// URL")
+                .clicked()
                 {
                     self.open_import();
                 }
                 let tip = shortcuts::hint(ui.ctx(), "Start an empty case", &shortcuts::NEW);
-                if button(ui, "New case", true).on_hover_text(tip).clicked() {
+                if button(ui, &with_icon(icon::PLUS, "New case"), true)
+                    .on_hover_text(tip)
+                    .clicked()
+                {
                     self.case_form = Some(CaseForm::New {
                         name: String::new(),
                         error: String::new(),
@@ -447,7 +454,10 @@ impl Desktop {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let users = self.users(&c.id);
                 if ui
-                    .add_enabled(users.is_empty(), form::removal_button("Delete"))
+                    .add_enabled(
+                        users.is_empty(),
+                        form::removal_button(&with_icon(icon::TRASH, "Delete")),
+                    )
                     .on_disabled_hover_text(format!(
                         "Active for {}. Make another case active first.",
                         users.join(", ")
@@ -460,7 +470,7 @@ impl Desktop {
                         Err(e) => self.fail(format!("{e:#}")),
                     }
                 }
-                if button(ui, "Duplicate", false)
+                if button(ui, &with_icon(icon::COPY, "Duplicate"), false)
                     .on_hover_text("Copy this case, with its files, to change it")
                     .clicked()
                 {
@@ -476,7 +486,7 @@ impl Desktop {
             ui.label(muted("The first rule that matches a message runs."));
             if c.source.is_none() {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if small_button(ui, "+ Add rule").clicked() {
+                    if small_button(ui, &with_icon(icon::PLUS, "Add rule")).clicked() {
                         self.rule_form = Some(rules::RuleForm::new(&self.root, c, None));
                     }
                 });
@@ -651,7 +661,7 @@ mod tests {
         click(&mut app, &ctx, "Cases")?;
         assert_eq!(app.case, "confirm-orders");
         // The partner picker opens a menu of partners.
-        click(&mut app, &ctx, "Supplier  ⏷")?;
+        click(&mut app, &ctx, &format!("Supplier  {}", icon::CARET_DOWN))?;
         click(&mut app, &ctx, "Supplier")?;
         assert_eq!(app.partner, 0);
         click(&mut app, &ctx, "Reject every order")?;
@@ -686,7 +696,7 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let (mut app, ctx) = open(dir.path())?;
         click(&mut app, &ctx, "Cases")?;
-        click(&mut app, &ctx, "New case")?;
+        click(&mut app, &ctx, &with_icon(icon::PLUS, "New case"))?;
         click(&mut app, &ctx, "Create case")?;
         assert!(
             matches!(&app.case_form, Some(CaseForm::New { error, .. }) if error.contains("name"))
@@ -723,12 +733,17 @@ mod tests {
                 .min_by(|a, b| a.area().total_cmp(&b.area()))
                 .unwrap_or(text)
         };
-        let row = ["Make active for Supplier", "Duplicate", "Delete"].map(rect);
+        let row = [
+            "Make active for Supplier".to_owned(),
+            with_icon(icon::COPY, "Duplicate"),
+            with_icon(icon::TRASH, "Delete"),
+        ]
+        .map(|l| rect(&l));
         for r in &row {
             assert_eq!(r.height(), BUTTON, "{row:?}");
             assert!((r.center().y - row[0].center().y).abs() < 0.5, "{row:?}");
         }
-        let add = rect("+ Add rule");
+        let add = rect(&with_icon(icon::PLUS, "Add rule"));
         assert_eq!(add.height(), SMALL_BUTTON);
         let rules = output
             .shapes
@@ -759,7 +774,7 @@ mod tests {
         assert!(created.rules.is_empty() && created.source.is_none());
         // The active case cannot be deleted; a copy of it can.
         click(&mut app, &ctx, "Confirm every order")?;
-        click(&mut app, &ctx, "Duplicate")?;
+        click(&mut app, &ctx, &with_icon(icon::COPY, "Duplicate"))?;
         assert_eq!(app.case, "confirm-every-order-copy");
         let copy = case::folder(dir.path(), "confirm-every-order-copy");
         assert!(copy.join("confirm.js").is_file());
@@ -772,7 +787,7 @@ mod tests {
                 .name,
             "Confirm every order (copy)"
         );
-        click(&mut app, &ctx, "Delete")?;
+        click(&mut app, &ctx, &with_icon(icon::TRASH, "Delete"))?;
         assert!(!copy.exists());
         assert_eq!(app.status, "Deleted case confirm-every-order-copy");
         click(&mut app, &ctx, "Undo")?;
@@ -784,7 +799,7 @@ mod tests {
                 .any(|c| c.id == "confirm-every-order-copy")
         );
         click(&mut app, &ctx, "Confirm every order (copy)")?;
-        click(&mut app, &ctx, "Delete")?;
+        click(&mut app, &ctx, &with_icon(icon::TRASH, "Delete"))?;
         assert!(!copy.exists());
         assert!(
             app.workspace
@@ -943,7 +958,11 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = Desktop::open(dir.path().into(), &ctx)?;
         click(&mut app, &ctx, "Cases")?;
-        click(&mut app, &ctx, "Import cases…")?;
+        click(
+            &mut app,
+            &ctx,
+            &with_icon(icon::DOWNLOAD_SIMPLE, "Import cases…"),
+        )?;
         app.import.as_mut().unwrap().source = edited.display().to_string();
         click(&mut app, &ctx, "Preview")?;
         wait_for(&mut app, "import preview", |a| {

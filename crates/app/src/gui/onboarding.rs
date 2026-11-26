@@ -148,7 +148,11 @@ impl Desktop {
                         }
                     }
                     for (i, (step, label, done)) in steps.iter().enumerate().filter(|_| !narrow) {
-                        let mark = if *done { "✓" } else { "○" };
+                        let mark = if *done {
+                            icon::CHECK_CIRCLE
+                        } else {
+                            icon::CIRCLE
+                        };
                         let color = if *done { GREEN } else { SECONDARY_TEXT };
                         ui.label(
                             RichText::new(format!("{mark} {label}"))

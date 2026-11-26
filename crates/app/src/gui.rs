@@ -798,13 +798,17 @@ send = { directory = "freight-out" }
         assert!(!app.listening);
         assert!(app.status.contains("Could not start listening"));
         drop(occupied);
-        click(&mut app, &ctx, "▷  Resume")?;
+        click(&mut app, &ctx, &with_icon(icon::PLAY, "Resume"))?;
         let until = Instant::now() + Duration::from_secs(8);
         while !app.listening {
             ensure!(Instant::now() < until, "start timed out");
             app.drain();
         }
-        click(&mut app, &ctx, "→  Send document…")?;
+        click(
+            &mut app,
+            &ctx,
+            &with_icon(icon::PAPER_PLANE_RIGHT, "Send document…"),
+        )?;
         app.send_file = "missing.edi".into();
         click(&mut app, &ctx, "Send")?;
         assert!(app.send_dialog && app.send_error.contains("missing.edi"));
@@ -995,7 +999,11 @@ send = { directory = "freight-out" }
             }
             app.clear_search();
         }
-        click(&mut app, &ctx, "→  Send document…")?;
+        click(
+            &mut app,
+            &ctx,
+            &with_icon(icon::PAPER_PLANE_RIGHT, "Send document…"),
+        )?;
         click(&mut app, &ctx, "JavaScript")?;
         // The choices are the active case's scripts, by workspace path.
         assert_eq!(app.send_file, "cases/confirm-orders/confirm.js");
@@ -1076,9 +1084,9 @@ send = { directory = "freight-out" }
         wait_for(&mut app, "replay", |app| {
             app.transfers.values().filter(|r| !r.outgoing).count() == 2
         })?;
-        click(&mut app, &ctx, "⏸  Pause")?;
+        click(&mut app, &ctx, &with_icon(icon::PAUSE, "Pause"))?;
         wait_for(&mut app, "listener stop", |app| !app.listening)?;
-        click(&mut app, &ctx, "▷  Resume")?;
+        click(&mut app, &ctx, &with_icon(icon::PLAY, "Resume"))?;
         wait_for(&mut app, "listener restart", |app| app.listening)?;
         click(&mut app, &ctx, "Settings")?;
         click(&mut app, &ctx, "Edit configuration file")?;

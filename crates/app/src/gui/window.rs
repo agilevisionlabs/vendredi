@@ -65,11 +65,19 @@ impl Desktop {
                     ui.add_space(GAP_L);
                     section(ui, "  TRAFFIC");
                     ui.add_space(GAP_S);
-                    if nav(ui, "All traffic", "", self.view == View::All, false) {
+                    if nav(
+                        ui,
+                        icon::ARROWS_LEFT_RIGHT,
+                        "All traffic",
+                        "",
+                        self.view == View::All,
+                        false,
+                    ) {
                         self.navigate(View::All);
                     }
                     if nav(
                         ui,
+                        icon::WARNING_CIRCLE,
                         "Needs attention",
                         &attention.to_string(),
                         self.view == View::Attention,
@@ -77,7 +85,7 @@ impl Desktop {
                     ) {
                         self.navigate(View::Attention);
                     }
-                    if nav(ui, "Clear history…", "", false, false) {
+                    if nav(ui, icon::BROOM, "Clear history…", "", false, false) {
                         self.open_cleanup();
                     }
                     ui.add_space(GAP_XL);
@@ -91,6 +99,7 @@ impl Desktop {
                         };
                         if nav(
                             ui,
+                            icon::BUILDINGS,
                             &partner.name,
                             kind,
                             self.view == View::Partner(p),
@@ -110,14 +119,15 @@ impl Desktop {
                     ui.add_space(GAP_XL);
                     section(ui, "  WORKSPACE");
                     ui.add_space(GAP_S);
-                    for (name, view) in [
-                        ("Cases", View::Cases),
-                        ("Scripts", View::Scripts),
-                        ("Documents", View::Documents),
-                        ("Settings", View::Settings),
+                    for (glyph, name, view) in [
+                        (icon::STACK, "Cases", View::Cases),
+                        (icon::CODE, "Scripts", View::Scripts),
+                        (icon::FILE_TEXT, "Documents", View::Documents),
+                        (icon::GEAR_SIX, "Settings", View::Settings),
                     ] {
                         if nav(
                             ui,
+                            glyph,
                             name,
                             "",
                             self.view == view
@@ -246,12 +256,12 @@ impl Desktop {
                         .vertical_align(Align::Center),
                 )
             });
-            let c = field.inner.rect.left_center() + vec2(15., -1.);
-            ui.painter()
-                .circle_stroke(c, 4., Stroke::new(1.4_f32, MUTED));
-            ui.painter().line_segment(
-                [c + vec2(3., 3.), c + vec2(6., 6.)],
-                Stroke::new(1.4_f32, MUTED),
+            ui.painter().text(
+                field.inner.rect.left_center() + vec2(15., 0.),
+                Align2::CENTER_CENTER,
+                icon::MAGNIFYING_GLASS,
+                font(15.),
+                MUTED,
             );
             let tip = shortcuts::hint(ui.ctx(), "Search traffic", &shortcuts::SEARCH);
             let field = field.inner.on_hover_text(tip);
@@ -588,18 +598,22 @@ impl Desktop {
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let tip = shortcuts::hint(ui.ctx(), "Send a document or script", &shortcuts::SEND);
-                if button(ui, "→  Send document…", true)
-                    .on_hover_text(tip)
-                    .clicked()
+                if button(
+                    ui,
+                    &with_icon(icon::PAPER_PLANE_RIGHT, "Send document…"),
+                    true,
+                )
+                .on_hover_text(tip)
+                .clicked()
                 {
                     self.open_send();
                 }
                 let toggle = if self.listening {
-                    "⏸  Pause"
+                    with_icon(icon::PAUSE, "Pause")
                 } else {
-                    "▷  Resume"
+                    with_icon(icon::PLAY, "Resume")
                 };
-                if button(ui, toggle, false).clicked() {
+                if button(ui, &toggle, false).clicked() {
                     self.command(Command::Listen(!self.listening));
                 }
             });

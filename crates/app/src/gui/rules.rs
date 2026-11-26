@@ -433,7 +433,7 @@ mod tests {
         let mut app = Desktop::open(dir.path().into(), &ctx)?;
         click(&mut app, &ctx, "Cases")?;
         assert_eq!(app.case, "confirm-orders");
-        click(&mut app, &ctx, "+ Add rule")?;
+        click(&mut app, &ctx, &with_icon(icon::PLUS, "Add rule"))?;
         click(&mut app, &ctx, "Save rule")?;
         assert!(app.rule_form.as_ref().unwrap().error.contains("name"));
         let f = app.rule_form.as_mut().unwrap();

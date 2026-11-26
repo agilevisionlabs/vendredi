@@ -49,6 +49,8 @@ pub(super) fn install(ctx: &Context) {
             .or_default()
             .insert(0, name.into());
     }
+    // Icons come from Phosphor, after the text faces.
+    egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
     ctx.set_fonts(fonts);
     let mut visuals = Visuals::light();
     visuals.panel_fill = BG;
@@ -119,7 +121,14 @@ pub(super) fn badge(ui: &mut Ui, text: &str, fg: Color32, bg: Color32, monospace
         );
     response.on_hover_text(text);
 }
-pub(super) fn nav(ui: &mut Ui, text: &str, trailing: &str, selected: bool, count: bool) -> bool {
+pub(super) fn nav(
+    ui: &mut Ui,
+    glyph: &str,
+    text: &str,
+    trailing: &str,
+    selected: bool,
+    count: bool,
+) -> bool {
     let (r, res) = ui.allocate_exact_size(vec2(ui.available_width(), 34.), Sense::click());
     let p = ui.painter();
     if selected || res.hovered() {
@@ -139,12 +148,20 @@ pub(super) fn nav(ui: &mut Ui, text: &str, trailing: &str, selected: bool, count
             .x;
         30. + tag_width
     };
-    job.wrap.max_width = (r.width() - reserved).max(1.);
+    job.wrap.max_width = (r.width() - reserved - 24.).max(1.);
     job.wrap.max_rows = 1;
     let galley = p.layout_job(job);
     let truncated = galley.elided;
+    // The icon is its own shape, so the item's text stays its plain name.
+    p.text(
+        r.left_center() + vec2(10., 0.),
+        Align2::LEFT_CENTER,
+        glyph,
+        font(15.),
+        if selected { BLUE } else { MUTED },
+    );
     p.galley(
-        r.left_center() + vec2(10., -galley.size().y / 2.),
+        r.left_center() + vec2(34., -galley.size().y / 2.),
         galley,
         TEXT,
     );
@@ -199,7 +216,14 @@ pub(super) fn line(ui: &Ui, a: Pos2, b: Pos2) {
     ui.painter()
         .line_segment([a, b], Stroke::new(1.0_f32, LINE));
 }
+/// The icon set. Labels put an icon before their text with `with_icon`.
+pub(super) use egui_phosphor::regular as icon;
 pub(super) use vendredi_core::engine::local_time as time;
+
+pub(super) fn with_icon(icon: &str, text: &str) -> String {
+    format!("{icon}  {text}")
+}
+
 /// The spacing scale. Views use these instead of literal gaps.
 pub(super) const GAP_XS: f32 = 4.;
 pub(super) const GAP_S: f32 = 8.;
@@ -327,7 +351,7 @@ pub(super) fn add_partner_button(ui: &mut Ui) -> bool {
     ui.painter().text(
         r.left_center() + vec2(10., 0.),
         Align2::LEFT_CENTER,
-        "+ Add partner",
+        &with_icon(icon::PLUS, "Add partner"),
         font(13.),
         MUTED,
     );
@@ -344,7 +368,14 @@ mod tests {
         let ctx = Context::default();
         install(&ctx);
         let _ = ctx.run(Default::default(), |_| {});
-        for c in ['⏸', '▷', '→', '⏷'] {
+        for c in [
+            icon::PAUSE,
+            icon::PLAY,
+            icon::PAPER_PLANE_RIGHT,
+            icon::CARET_DOWN,
+        ]
+        .map(|s| s.chars().next().unwrap())
+        {
             assert!(
                 ctx.fonts_mut(|f| f.has_glyph(&FontId::proportional(13.), c)),
                 "{c}"

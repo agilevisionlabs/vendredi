@@ -265,8 +265,9 @@ impl Session {
                         ui.add_space(GAP_XL);
                         let demo = demo_root();
                         let demo_exists = demo.as_deref().is_some_and(is_workspace);
-                        for (title, text, choice) in [
+                        for (glyph, title, text, choice) in [
                             (
+                                icon::PLAY_CIRCLE,
                                 "Try the demo",
                                 if demo_exists {
                                     "Open the demo workspace in ~/Vendredi: a sample supplier and 13 starter cases."
@@ -276,17 +277,19 @@ impl Session {
                                 Do::Page(View::All),
                             ),
                             (
+                                icon::FOLDER_PLUS,
                                 "Create a workspace…",
                                 "Choose an empty folder. Vendredi sets it up and helps you describe your first partner.",
                                 Do::NewWorkspace,
                             ),
                             (
+                                icon::FOLDER_OPEN,
                                 "Open a workspace…",
                                 "Choose a folder that has a vendredi.toml.",
                                 Do::OpenWorkspace,
                             ),
                         ] {
-                            if choice_card(ui, title, text).clicked() {
+                            if choice_card(ui, glyph, title, text).clicked() {
                                 pick = Some(choice);
                             }
                             ui.add_space(GAP_S);
@@ -333,12 +336,18 @@ impl Session {
 }
 
 /// A large choice on the welcome screen: a title and a line about it.
-fn choice_card(ui: &mut egui::Ui, title: &str, text: &str) -> egui::Response {
+fn choice_card(ui: &mut egui::Ui, glyph: &str, title: &str, text: &str) -> egui::Response {
     let response = card_frame(BG, LINE)
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(RichText::new(title).font(bold(15.)).color(TEXT));
-            ui.label(RichText::new(text).color(SECONDARY_TEXT));
+            ui.horizontal_top(|ui| {
+                ui.label(RichText::new(glyph).size(24.).color(BLUE));
+                ui.add_space(GAP_S);
+                ui.vertical(|ui| {
+                    ui.label(RichText::new(title).font(bold(15.)).color(TEXT));
+                    ui.label(RichText::new(text).color(SECONDARY_TEXT));
+                });
+            });
         })
         .response
         .interact(egui::Sense::click());

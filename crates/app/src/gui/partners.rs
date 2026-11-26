@@ -678,7 +678,7 @@ mod tests {
         fs::write(&config, format!("# keep this comment\n{original}"))?;
         let ctx = egui::Context::default();
         let mut app = Desktop::open(dir.path().into(), &ctx)?;
-        click(&mut app, &ctx, "+ Add partner")?;
+        click(&mut app, &ctx, &with_icon(icon::PLUS, "Add partner"))?;
         // The guided setup asks who the partner is before going on.
         assert_eq!(app.partner_form.as_ref().unwrap().step, Some(0));
         assert!(app.partner_form.as_ref().unwrap().step_problem().is_some());
@@ -763,7 +763,7 @@ mod tests {
         fs::write(&config, fs::read_to_string(&config)?.replace(":8180", ":0"))?;
         let ctx = egui::Context::default();
         let mut app = Desktop::open(dir.path().into(), &ctx)?;
-        click(&mut app, &ctx, "+ Add partner")?;
+        click(&mut app, &ctx, &with_icon(icon::PLUS, "Add partner"))?;
         click(&mut app, &ctx, "X12")?;
         let form = app.partner_form.as_mut().context("missing partner form")?;
         assert_eq!(form.partner.standard, Standard::X12);

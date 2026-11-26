@@ -146,7 +146,7 @@ impl Desktop {
                                 if t.undo.is_some()
                                     && ui
                                         .add(
-                                            egui::Button::new(RichText::new("×").color(color))
+                                            egui::Button::new(RichText::new(icon::X).color(color))
                                                 .frame(false),
                                         )
                                         .on_hover_text("Dismiss")
