@@ -72,6 +72,24 @@ pub fn run(bundle: &Bundle) -> Result<Vec<Outcome>> {
         .collect()
 }
 
+/// What Vendredi sends for a sample today, as `expect` would compare it, so
+/// it can be recorded as the expected replies.
+pub fn observe(bundle: &Bundle, sample: &str) -> Result<Vec<String>> {
+    ensure!(
+        bundle.case.sample(sample).is_some(),
+        "case {} has no sample named {sample}",
+        bundle.case.id
+    );
+    replies(
+        bundle,
+        &case::Expect {
+            sample: Some(sample.into()),
+            initiate: None,
+            replies: vec![],
+        },
+    )
+}
+
 fn replies(bundle: &Bundle, e: &case::Expect) -> Result<Vec<String>> {
     let dir = tempfile::tempdir()?;
     let id = &bundle.case.id;
@@ -217,6 +235,11 @@ mod tests {
         bundle.case.expect[0].replies.pop();
         let outcome = &run(&bundle)?[0];
         assert!(outcome.failures[0].contains("expected 1 reply, Vendredi sent 2"));
+        // Observing a sample gives the replies a passing expectation holds.
+        let seen = observe(&bundle, "Order")?;
+        assert_eq!(seen.len(), 2);
+        assert!(seen[0].starts_with("UNH+1+CONTRL") && seen[1].starts_with("UNH+1+ORDRSP"));
+        assert!(observe(&bundle, "Missing").is_err());
         Ok(())
     }
 }

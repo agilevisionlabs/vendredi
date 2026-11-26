@@ -370,19 +370,7 @@ pub fn empty(id: &str, name: &str, standard: Standard) -> Case {
 /// An id derived from a name, such as `northline-supply`, that no installed
 /// case uses yet.
 pub fn unused_id(root: &Path, name: &str) -> String {
-    let mut base = String::new();
-    for c in name.chars().flat_map(char::to_lowercase) {
-        if c.is_ascii_alphanumeric() {
-            base.push(c);
-        } else if !base.is_empty() && !base.ends_with('-') {
-            base.push('-');
-        }
-    }
-    base.truncate(56);
-    let base = match base.trim_end_matches('-') {
-        "" => "case".to_owned(),
-        b => b.to_owned(),
-    };
+    let base = slug(name);
     (1..)
         .map(|n| {
             if n == 1 {
@@ -393,6 +381,23 @@ pub fn unused_id(root: &Path, name: &str) -> String {
         })
         .find(|id| !folder(root, id).exists())
         .unwrap()
+}
+
+/// A name as lowercase words joined by hyphens, such as `northline-supply`.
+pub fn slug(name: &str) -> String {
+    let mut base = String::new();
+    for c in name.chars().flat_map(char::to_lowercase) {
+        if c.is_ascii_alphanumeric() {
+            base.push(c);
+        } else if !base.is_empty() && !base.ends_with('-') {
+            base.push('-');
+        }
+    }
+    base.truncate(56);
+    match base.trim_end_matches('-') {
+        "" => "case".to_owned(),
+        b => b.to_owned(),
+    }
 }
 
 /// The `case.json` text editors write.

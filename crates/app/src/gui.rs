@@ -180,6 +180,11 @@ struct Desktop {
     import: Option<cases::ImportForm>,
     case_form: Option<cases::CaseForm>,
     checks: Option<cases::Checks>,
+    /// A case whose replies are being recorded, and where they arrive.
+    recording: Option<(
+        String,
+        mpsc::Receiver<std::result::Result<Vec<(String, Vec<String>)>, String>>,
+    )>,
     /// The Report a problem text while its dialog is open.
     report: Option<String>,
     /// The last failure, for problem reports.
@@ -270,6 +275,7 @@ impl Desktop {
             import: None,
             case_form: None,
             checks: None,
+            recording: None,
             report: None,
             last_error: String::new(),
             focus_search: false,
@@ -362,6 +368,7 @@ impl Desktop {
                 }
                 "import_ready" => self.poll_import(),
                 "checks_ready" => self.poll_checks(),
+                "replies_recorded" => self.finish_recording(),
                 _ => {
                     refresh = true;
                     if let Some(error) = v["error"].as_str() {

@@ -544,6 +544,19 @@ impl Desktop {
                         self.fail(format!("{e:#}"));
                     }
                 }
+                if c.source.is_none() && !c.samples.is_empty() {
+                    let busy = self.recording.as_ref().is_some_and(|r| r.0 == c.id);
+                    if ui
+                        .add_enabled(
+                            !busy,
+                            styled(&with_icon(icon::ARROW_CLOCKWISE, "Record expected replies"), false, SMALL_BUTTON),
+                        )
+                        .on_hover_text("Send each sample in a scratch workspace and keep what Vendredi replies as the expected result")
+                        .clicked()
+                    {
+                        self.record_replies(c);
+                    }
+                }
                 if !c.expect.is_empty() {
                     let running = self.checks.as_ref().is_some_and(|k| k.case == c.id && k.pending.is_some());
                     if ui
@@ -662,6 +675,83 @@ impl Desktop {
             case.samples.retain(|s| s.name != name);
             case.expect.retain(|e| e.sample.as_deref() != Some(name));
         })
+    }
+
+    fn record_replies(&mut self, c: &Case) {
+        let folder = case::folder(&self.root, &c.id);
+        let samples: Vec<String> = c.samples.iter().map(|s| s.name.clone()).collect();
+        let (tx, rx) = mpsc::channel();
+        let out = self.output.clone();
+        thread::spawn(move || {
+            let result = case::Bundle::load(&folder)
+                .and_then(|b| {
+                    samples
+                        .iter()
+                        .map(|s| Ok((s.clone(), vendredi_core::selftest::observe(&b, s)?)))
+                        .collect::<Result<Vec<_>>>()
+                })
+                .map_err(|e| format!("{e:#}"));
+            let _ = tx.send(result);
+            out(json!({"event":"replies_recorded"}));
+        });
+        self.recording = Some((c.id.clone(), rx));
+    }
+
+    /// Writes recorded replies into the case as its expected results.
+    pub(super) fn finish_recording(&mut self) {
+        let Some((id, rx)) = &self.recording else {
+            return;
+        };
+        let Ok(result) = rx.try_recv() else {
+            return;
+        };
+        let id = id.clone();
+        self.recording = None;
+        let Some(c) = self.workspace.cases.iter().find(|c| c.id == id).cloned() else {
+            return;
+        };
+        let written = result.map_err(anyhow::Error::msg).and_then(|observed| {
+            let folder = case::folder(&self.root, &id);
+            let mut expect = Vec::new();
+            for (sample, replies) in &observed {
+                let mut files = Vec::new();
+                for (n, text) in replies.iter().enumerate() {
+                    let name =
+                        PathBuf::from(format!("expected-{}-{}.edi", case::slug(sample), n + 1));
+                    // Messages are Latin-1 text; write them back byte for byte.
+                    let bytes: Vec<u8> = text
+                        .chars()
+                        .map(|ch| u8::try_from(u32::from(ch)).unwrap_or(b'?'))
+                        .collect();
+                    fs::write(folder.join(&name), bytes)?;
+                    files.push(name);
+                }
+                expect.push(case::Expect {
+                    sample: Some(sample.clone()),
+                    initiate: None,
+                    replies: files,
+                });
+            }
+            let count = observed.len();
+            self.edit_case(
+                &c,
+                &format!(
+                    "Recorded the replies to {count} sample{}",
+                    if count == 1 { "" } else { "s" }
+                ),
+                |case| {
+                    case.expect.retain(|e| {
+                        e.sample
+                            .as_ref()
+                            .is_none_or(|s| !observed.iter().any(|(o, _)| o == s))
+                    });
+                    case.expect.extend(expect);
+                },
+            )
+        });
+        if let Err(e) = written {
+            self.fail(format!("Recording replies: {e:#}"));
+        }
     }
 
     fn run_checks(&mut self, c: &Case) {
@@ -1167,6 +1257,56 @@ mod tests {
             .find(|c| c.id == "confirm-orders")
             .unwrap();
         assert_eq!(c.samples.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "opens a local workspace listener"]
+    fn recorded_replies_become_the_expected_result() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let (mut app, ctx) = open(dir.path())?;
+        let id = app.create_case("Acknowledge only")?;
+        let c = app
+            .workspace
+            .cases
+            .iter()
+            .find(|c| c.id == id)
+            .unwrap()
+            .clone();
+        let order = dir.path().join("order-message.edi");
+        fs::write(&order, "UNH+1+ORDERS:D:96A:UN'BGM+220+PO7+9'UNT+3+1'")?;
+        app.add_sample(&c, &order)?;
+        let c = app
+            .workspace
+            .cases
+            .iter()
+            .find(|c| c.id == id)
+            .unwrap()
+            .clone();
+        app.case = id.clone();
+        click(&mut app, &ctx, "Cases")?;
+        app.record_replies(&c);
+        wait_for(&mut app, "recorded replies", |a| a.recording.is_none())?;
+        let c = app
+            .workspace
+            .cases
+            .iter()
+            .find(|c| c.id == id)
+            .unwrap()
+            .clone();
+        assert_eq!(c.expect.len(), 1, "{:?}", app.status);
+        // Without rules the partner only acknowledges.
+        assert_eq!(c.expect[0].replies.len(), 1);
+        let reply = case::folder(dir.path(), &id).join(&c.expect[0].replies[0]);
+        assert!(fs::read_to_string(reply)?.starts_with("UNH+1+CONTRL"));
+        app.run_checks(&c);
+        wait_for(&mut app, "checks", |a| {
+            a.checks.as_ref().is_some_and(|k| k.results.is_some())
+        })?;
+        let Some(Ok(results)) = &app.checks.as_ref().unwrap().results else {
+            panic!("checks failed to run");
+        };
+        assert!(results.iter().all(|(_, f)| f.is_empty()), "{results:?}");
         Ok(())
     }
 
