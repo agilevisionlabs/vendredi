@@ -38,6 +38,8 @@ fn rule_row(ui: &mut Ui, height: f32, mut cell: impl FnMut(usize, &mut Ui)) {
 /// Edits one rule of a case in its `case.json`.
 pub(super) struct RuleForm {
     case: String,
+    /// The case folder, where chosen files are copied.
+    folder: PathBuf,
     /// `case.json` as it was when the form opened.
     original: Vec<u8>,
     index: Option<usize>,
@@ -64,6 +66,7 @@ impl RuleForm {
         let path = case::folder(root, &case.id).join(case::FILE);
         Self {
             case: case.id.clone(),
+            folder: case::folder(root, &case.id),
             original: fs::read(path).unwrap_or_default(),
             index,
             order: index.unwrap_or(rules.len()) + 1,
@@ -195,9 +198,11 @@ impl RuleForm {
             ui.push_id(i, |ui| {
                 form::card(ui, |ui| {
                     match action {
-                        Action::Document { document } => path_input(ui, "Document file", document),
+                        Action::Document { document } => {
+                            case_file(ui, &self.folder, "Document file", document, &mut self.error);
+                        }
                         Action::Script { script, function } => {
-                            path_input(ui, "JavaScript file", script);
+                            case_file(ui, &self.folder, "JavaScript file", script, &mut self.error);
                             form::field(ui, "Entry function", function);
                         }
                         Action::Delay { delay_ms } => {
@@ -257,9 +262,27 @@ impl RuleForm {
         }
     }
 }
-fn path_input(ui: &mut Ui, label: &str, path: &mut PathBuf) {
+/// A path inside the case folder, typed or chosen. A file chosen elsewhere
+/// is copied into the case.
+fn case_file(ui: &mut Ui, folder: &Path, label: &str, path: &mut PathBuf, error: &mut String) {
     let mut s = path.display().to_string();
-    if form::input(ui, label, &mut s, "Path inside the case folder").changed() {
+    let script = label.contains("JavaScript");
+    let changed = form::path_input(ui, label, &mut s, "Path inside the case folder", || {
+        let filters: &[(&str, &[&str])] = if script {
+            &[("JavaScript", &["js"])]
+        } else {
+            &[("EDI documents", &["edi", "x12", "txt"])]
+        };
+        let chosen = form::pick_file(folder, filters)?;
+        match form::into_folder(folder, &chosen) {
+            Ok(inside) => Some(inside.display().to_string()),
+            Err(e) => {
+                *error = format!("{e:#}");
+                None
+            }
+        }
+    });
+    if changed {
         *path = s.into();
     }
 }

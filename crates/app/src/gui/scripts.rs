@@ -142,9 +142,29 @@ impl ScriptForm {
                         }
                     });
             }
-            field(ui, "Script file", &mut self.file);
+            let folder = case::folder(&w.root, &self.case);
+            let mut chosen = None;
+            form::path_input(ui, "Script file", &mut self.file, "orders.js", || {
+                let picked = form::pick_file(&folder, &[("JavaScript", &["js"])])?;
+                match form::into_folder(&folder, &picked) {
+                    Ok(inside) => {
+                        chosen = Some(());
+                        Some(inside.display().to_string())
+                    }
+                    Err(e) => {
+                        self.error = format!("{e:#}");
+                        None
+                    }
+                }
+            });
+            // A chosen script opens for editing.
+            if chosen.is_some()
+                && let Err(e) = self.load(&w.root)
+            {
+                self.error = format!("{e:#}");
+            }
             ui.label(muted(format!(
-                "A path inside the case folder cases/{}, such as orders.js.",
+                "A path inside the case folder cases/{}. Choosing a file elsewhere copies it into the case.",
                 self.case
             )));
             if self.path(&w.root).is_file()

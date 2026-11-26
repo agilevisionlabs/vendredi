@@ -5,6 +5,7 @@ impl Desktop {
         self.dispatch_search(ctx);
         self.drain();
         self.shortcuts(ctx);
+        self.file_drops(ctx);
         let count = self.transfers.values().filter(|t| self.visible(t)).count();
         let attention = self.transfers.values().filter(|t| t.attention).count();
         TopBottomPanel::bottom("footer")
@@ -532,5 +533,62 @@ impl Desktop {
                 }
             });
         });
+    }
+
+    /// Files dragged onto the window: an EDI document or script opens the
+    /// send dialog, a case JSON file or folder opens the import preview.
+    fn file_drops(&mut self, ctx: &egui::Context) {
+        let (hovering, dropped) = ctx.input(|i| {
+            (
+                !i.raw.hovered_files.is_empty(),
+                i.raw.dropped_files.iter().find_map(|f| f.path.clone()),
+            )
+        });
+        if self.dialog_open() {
+            return;
+        }
+        if hovering {
+            let screen = ctx.content_rect();
+            let painter = ctx.layer_painter(LayerId::new(Order::Foreground, Id::new("drop")));
+            painter.rect_filled(
+                screen,
+                0,
+                Color32::from_rgba_unmultiplied(247, 249, 252, 230),
+            );
+            let target = screen.shrink(GAP_XL);
+            painter.rect_stroke(target, 12, Stroke::new(2.0_f32, BLUE), StrokeKind::Inside);
+            painter.text(
+                target.center() - vec2(0., 12.),
+                Align2::CENTER_CENTER,
+                "Drop to send or import",
+                bold(20.),
+                TEXT,
+            );
+            painter.text(
+                target.center() + vec2(0., 16.),
+                Align2::CENTER_CENTER,
+                "An EDI document or script is sent to a partner. A case file or folder is imported.",
+                font(13.),
+                MUTED,
+            );
+        }
+        let Some(path) = dropped else {
+            return;
+        };
+        let extension = path
+            .extension()
+            .map(|e| e.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        if path.is_dir() || extension == "json" {
+            self.import_from(&path);
+        } else {
+            self.open_send();
+            self.send_script = extension == "js";
+            self.function.clear();
+            self.send_file = match path.strip_prefix(&self.root) {
+                Ok(inside) => inside.display().to_string(),
+                Err(_) => path.display().to_string(),
+            };
+        }
     }
 }

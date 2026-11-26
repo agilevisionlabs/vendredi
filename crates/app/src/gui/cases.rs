@@ -17,7 +17,7 @@ pub(super) struct ImportForm {
 }
 
 impl Desktop {
-    fn start_preview(&mut self) {
+    pub(super) fn start_preview(&mut self) {
         let Some(form) = &mut self.import else {
             return;
         };
@@ -61,13 +61,28 @@ impl Desktop {
             ui.label(muted(
                 "Enter a case folder, a case or catalog JSON file, or an https:// URL. Nothing is installed until you confirm.",
             ));
-            let field = form::input(
+            let home = self.root.clone();
+            let mut folder = false;
+            form::path_input(
                 ui,
                 "Folder, file or URL",
                 &mut form.source,
                 "https://example.com/cases/catalog.json",
+                || {
+                    let chosen = form::pick_file(&home, &[("Cases and catalogs", &["json"])])?;
+                    // A chosen file is previewed straight away.
+                    start = true;
+                    Some(chosen.display().to_string())
+                },
             );
-            if field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            if ui.link("Choose a case folder instead…").clicked() {
+                folder = true;
+            }
+            if folder && let Some(dir) = form::pick_folder(&home) {
+                form.source = dir.display().to_string();
+                start = true;
+            }
+            if ui.input(|i| i.key_pressed(egui::Key::Enter)) && !form.source.trim().is_empty() {
                 start = true;
             }
             match &form.preview {
@@ -289,12 +304,21 @@ impl Desktop {
         });
     }
 
-    fn open_import(&mut self) {
+    pub(super) fn open_import(&mut self) {
         self.import = Some(ImportForm {
             source: String::new(),
             pending: None,
             preview: None,
         });
+    }
+
+    /// Opens the import dialog on a dropped or chosen case, already previewing.
+    pub(super) fn import_from(&mut self, source: &Path) {
+        self.open_import();
+        if let Some(form) = &mut self.import {
+            form.source = source.display().to_string();
+        }
+        self.start_preview();
     }
 
     /// The empty list: what cases are for and the ways to get some.
@@ -790,6 +814,64 @@ mod tests {
         click(&mut app, &ctx, "Cases")?;
         let warning = app.workspace.warnings[0].clone();
         assert!(click(&mut app, &ctx, &warning).is_err());
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "opens a local workspace listener"]
+    fn dropped_files_open_send_or_import() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let (mut app, ctx) = open(dir.path())?;
+        let drop = |app: &mut Desktop, path: &Path| {
+            let _ = ctx.run(
+                egui::RawInput {
+                    dropped_files: vec![egui::DroppedFile {
+                        path: Some(path.into()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+                |ctx| app.show(ctx),
+            );
+        };
+        drop(&mut app, &dir.path().join("order.edi"));
+        assert!(app.send_dialog && !app.send_script);
+        assert_eq!(app.send_file, "order.edi");
+        app.send_dialog = false;
+        let case = dir.path().join("cases/reject-orders/case.json");
+        drop(&mut app, &case);
+        let form = app.import.as_ref().context("import dialog")?;
+        assert_eq!(form.source, case.display().to_string());
+        assert!(form.pending.is_some() || form.preview.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn chosen_files_are_copied_into_the_case() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let folder = dir.path().join("cases/orders");
+        fs::create_dir_all(&folder)?;
+        fs::write(folder.join("inside.edi"), "a")?;
+        assert_eq!(
+            form::into_folder(&folder, &folder.join("inside.edi"))?,
+            Path::new("inside.edi")
+        );
+        let outside = dir.path().join("reply.edi");
+        fs::write(&outside, "b")?;
+        assert_eq!(
+            form::into_folder(&folder, &outside)?,
+            Path::new("reply.edi")
+        );
+        assert_eq!(fs::read_to_string(folder.join("reply.edi"))?, "b");
+        // The same file again is fine; a different one with that name is not.
+        assert!(form::into_folder(&folder, &outside).is_ok());
+        fs::write(&outside, "c")?;
+        assert!(
+            form::into_folder(&folder, &outside)
+                .unwrap_err()
+                .to_string()
+                .contains("different reply.edi")
+        );
         Ok(())
     }
 

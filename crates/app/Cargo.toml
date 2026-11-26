@@ -12,3 +12,4 @@ vendredi-transports.workspace = true
 eframe = { version = "0.33", default-features = false, features = ["accesskit", "default_fonts", "glow", "persistence", "x11", "wayland"] }
 tempfile = "3"
 toml_edit = { version = "0.25", features = ["serde"] }
+rfd = "0.18.0"

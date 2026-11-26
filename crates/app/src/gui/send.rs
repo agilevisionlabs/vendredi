@@ -1,6 +1,6 @@
 use super::*;
 use egui::{ComboBox, ScrollArea};
-use vendredi_core::{edi, script};
+use vendredi_core::script;
 
 impl Desktop {
     fn send_choices(&self) -> BTreeSet<(String, String)> {
@@ -41,7 +41,10 @@ impl Desktop {
         } else {
             let bytes =
                 fs::read(&absolute).with_context(|| format!("Opening {}", absolute.display()))?;
-            edi::document(&bytes)?;
+            vendredi_core::interchange::document(
+                self.workspace.partners[self.send_partner].standard,
+                &bytes,
+            )?;
         }
         self.running
             .tx
@@ -165,7 +168,27 @@ impl Desktop {
                                     }
                                 });
                         }
-                        form::field(ui, "Workspace file", &mut self.send_file);
+                        let root = self.root.clone();
+                        let script = self.send_script;
+                        form::path_input(
+                            ui,
+                            "File",
+                            &mut self.send_file,
+                            "A workspace path or any file",
+                            || {
+                                let filters: &[(&str, &[&str])] = if script {
+                                    &[("JavaScript", &["js"])]
+                                } else {
+                                    &[("EDI documents", &["edi", "x12", "txt"])]
+                                };
+                                let chosen = form::pick_file(&root, filters)?;
+                                // Workspace files keep a short relative path.
+                                Some(match chosen.strip_prefix(&root) {
+                                    Ok(inside) => inside.display().to_string(),
+                                    Err(_) => chosen.display().to_string(),
+                                })
+                            },
+                        );
                         if self.send_script {
                             form::field(ui, "Entry function", &mut self.function);
                         }

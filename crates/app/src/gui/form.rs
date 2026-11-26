@@ -1,5 +1,6 @@
 use super::theme::*;
 use eframe::egui::*;
+use std::path::{Path, PathBuf};
 
 pub(super) fn modal(
     ctx: &Context,
@@ -81,4 +82,77 @@ pub(super) fn removal_button(label: &str) -> Button<'_> {
         .min_size(vec2(0., BUTTON))
         .fill(red)
         .stroke(Stroke::new(1.0_f32, red))
+}
+
+/// A text field for a path with a **Choose…** button on the same line.
+/// `choose` opens the native dialog and returns the text to put in the field.
+pub(super) fn path_input(
+    ui: &mut Ui,
+    caption: &str,
+    value: &mut String,
+    hint: &str,
+    choose: impl FnOnce() -> Option<String>,
+) -> bool {
+    let mut changed = false;
+    ui.vertical(|ui| {
+        ui.spacing_mut().item_spacing.y = 5.;
+        let name = label(ui, caption);
+        ui.horizontal(|ui| {
+            let button_width = 92.;
+            let field = ui
+                .add(
+                    TextEdit::singleline(value)
+                        .hint_text(RichText::new(hint).color(MUTED))
+                        .background_color(BG)
+                        .margin(Margin::symmetric(10, 7))
+                        .desired_width(ui.available_width() - button_width - GAP_S)
+                        .min_size(vec2(0., BUTTON)),
+                )
+                .labelled_by(name.id);
+            changed |= field.changed();
+            if ui
+                .add_sized([button_width, BUTTON], styled("Choose…", false, BUTTON))
+                .clicked()
+                && let Some(picked) = choose()
+            {
+                *value = picked;
+                changed = true;
+            }
+        });
+    });
+    changed
+}
+
+/// A file chosen in the native dialog, starting in `dir`.
+pub(super) fn pick_file(dir: &Path, filters: &[(&str, &[&str])]) -> Option<PathBuf> {
+    let mut dialog = rfd::FileDialog::new().set_directory(dir);
+    for (name, extensions) in filters {
+        dialog = dialog.add_filter(*name, extensions);
+    }
+    dialog.pick_file()
+}
+
+pub(super) fn pick_folder(dir: &Path) -> Option<PathBuf> {
+    rfd::FileDialog::new().set_directory(dir).pick_folder()
+}
+
+/// Files a case uses live in its folder. A file chosen elsewhere is copied
+/// in, keeping its name, and the path inside the case is returned.
+pub(super) fn into_folder(folder: &Path, chosen: &Path) -> anyhow::Result<PathBuf> {
+    use anyhow::Context;
+    if let Ok(inside) = chosen.strip_prefix(folder) {
+        return Ok(inside.to_path_buf());
+    }
+    let name = chosen.file_name().context("choose a file")?;
+    let target = folder.join(name);
+    let bytes = std::fs::read(chosen)?;
+    match std::fs::read(&target) {
+        Ok(existing) if existing == bytes => {}
+        Ok(_) => anyhow::bail!(
+            "The case already has a different {}. Rename one of them first.",
+            name.to_string_lossy()
+        ),
+        Err(_) => std::fs::write(&target, bytes)?,
+    }
+    Ok(PathBuf::from(name))
 }
