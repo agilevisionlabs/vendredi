@@ -332,7 +332,7 @@ impl Desktop {
         card_frame(col::bg(), col::line()).show(ui, |ui| {
             ui.set_width(ui.available_width());
             title_row(ui, |ui| {
-                ui.label(RichText::new("No cases installed").font(bold(13.)));
+                ui.label(RichText::new("No cases installed").font(ty::strong()));
             });
             ui.label(muted(
                 "Install the starter set of common scenarios, import cases your team keeps in a folder or repository, or start a new one.",
@@ -372,7 +372,7 @@ impl Desktop {
         frame.show(ui, |ui| {
             ui.set_width(ui.available_width());
             title_row(ui, |ui| {
-                if ui.link(RichText::new(&c.name).font(bold(13.))).clicked() {
+                if ui.link(RichText::new(&c.name).font(ty::strong())).clicked() {
                     self.case = c.id.clone();
                 }
                 if active {
@@ -382,12 +382,12 @@ impl Desktop {
                 }
             });
             ui.horizontal_wrapped(|ui| {
-                ui.label(muted(&c.id).monospace().size(11.));
+                ui.label(muted(&c.id).monospace().size(ty::CAPTION));
                 if c.standard != self.workspace.partners[self.partner].standard {
-                    ui.label(muted(c.standard.label()).size(11.));
+                    ui.label(muted(c.standard.label()).size(ty::CAPTION));
                 }
                 for tag in &c.tags {
-                    ui.label(muted(format!("#{tag}")).size(11.));
+                    ui.label(muted(format!("#{tag}")).size(ty::CAPTION));
                 }
             });
         });
@@ -436,7 +436,7 @@ impl Desktop {
         let compatible = c.standard == partner.standard;
         let name = partner.name.clone();
         title_row(ui, |ui| {
-            ui.label(RichText::new(&c.name).font(bold(17.)));
+            ui.label(RichText::new(&c.name).font(ty::heading()));
             badge(
                 ui,
                 c.standard.label(),
@@ -445,7 +445,7 @@ impl Desktop {
                 true,
             );
             if let Some(source) = &c.source {
-                ui.label(muted("Imported").size(12.))
+                ui.label(muted("Imported").size(ty::SMALL))
                     .on_hover_text(format!("Imported from {source}"));
             }
         });

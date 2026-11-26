@@ -26,7 +26,7 @@ pub(super) fn modal(
             ui.visuals_mut().widgets.inactive.bg_stroke.color = col::edge();
             ui.visuals_mut().widgets.hovered.bg_stroke.color = col::blue();
             ui.visuals_mut().widgets.active.bg_stroke.color = col::blue();
-            ui.label(RichText::new(title).font(bold(22.)));
+            ui.label(RichText::new(title).font(ty::title()));
             ui.add_space(GAP_XS);
             contents(ui);
         });
@@ -38,7 +38,7 @@ pub(super) fn modal(
 pub(super) fn label(ui: &mut Ui, text: &str) -> Response {
     ui.label(
         RichText::new(text)
-            .font(bold(12.))
+            .font(ty::label())
             .color(col::secondary_text()),
     )
 }

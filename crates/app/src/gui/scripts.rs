@@ -428,7 +428,7 @@ impl Desktop {
                         };
                         if first {
                             ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new(&c.name).font(bold(15.)));
+                                ui.label(egui::RichText::new(&c.name).font(ty::section()));
                                 ui.label(muted(&c.id).monospace());
                             });
                             first = false;

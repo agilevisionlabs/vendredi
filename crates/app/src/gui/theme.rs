@@ -202,13 +202,74 @@ pub(super) fn install(ctx: &Context) {
         ctx.set_visuals_of(theme, visuals(theme, palette));
     }
     ctx.style_mut(|style| {
-        style.text_styles.insert(TextStyle::Body, font(13.));
-        style.text_styles.insert(TextStyle::Button, font(13.));
-        style.text_styles.insert(TextStyle::Monospace, mono(12.));
+        style.text_styles.insert(TextStyle::Body, ty::body());
+        style.text_styles.insert(TextStyle::Button, ty::body());
+        style.text_styles.insert(TextStyle::Monospace, ty::code());
         style.spacing.item_spacing = vec2(8., 6.);
         style.spacing.button_padding = vec2(10., 5.);
     });
 }
+/// The type scale. Views use these roles instead of point sizes.
+pub(super) mod ty {
+    use super::{FontId, bold, font, mono, mono_bold};
+    /// Sizes for `RichText::size`.
+    pub const BODY: f32 = 13.;
+    pub const SMALL: f32 = 12.;
+    pub const CAPTION: f32 = 11.;
+    pub const LEAD: f32 = 15.;
+    /// The welcome screen's greeting.
+    pub fn display() -> FontId {
+        bold(26.)
+    }
+    /// Dialog and screen titles.
+    pub fn title() -> FontId {
+        bold(22.)
+    }
+    /// The title of a detail card.
+    pub fn heading() -> FontId {
+        bold(17.)
+    }
+    /// Section headings inside a page or dialog.
+    pub fn section() -> FontId {
+        bold(15.)
+    }
+    /// Emphasised body text, such as list item names.
+    pub fn strong() -> FontId {
+        bold(BODY)
+    }
+    /// Field labels.
+    pub fn label() -> FontId {
+        bold(SMALL)
+    }
+    /// Small capitals above sidebar groups.
+    pub fn overline() -> FontId {
+        bold(CAPTION)
+    }
+    pub fn body() -> FontId {
+        font(BODY)
+    }
+    pub fn small() -> FontId {
+        font(SMALL)
+    }
+    pub fn caption() -> FontId {
+        font(CAPTION)
+    }
+    /// Icons drawn on their own, next to text.
+    pub fn icon() -> FontId {
+        font(LEAD)
+    }
+    pub fn code() -> FontId {
+        mono(SMALL)
+    }
+    pub fn code_strong() -> FontId {
+        mono_bold(SMALL)
+    }
+    /// Large figures, such as a message type in the inspector.
+    pub fn code_display() -> FontId {
+        mono_bold(18.)
+    }
+}
+
 pub(super) fn font(size: f32) -> FontId {
     FontId::proportional(size)
 }
@@ -222,18 +283,18 @@ pub(super) fn mono_bold(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("Plex SemiBold".into()))
 }
 pub(super) fn muted(s: impl Into<String>) -> RichText {
-    RichText::new(s).size(12.).color(col::muted())
+    RichText::new(s).size(ty::SMALL).color(col::muted())
 }
 pub(super) fn section(ui: &mut Ui, s: &str) {
     ui.label(
         RichText::new(s)
-            .font(bold(11.))
+            .font(ty::overline())
             .extra_letter_spacing(0.8)
             .color(col::muted()),
     );
 }
 pub(super) fn badge(ui: &mut Ui, text: &str, fg: Color32, bg: Color32, monospace: bool) {
-    let face = if monospace { mono(12.) } else { font(12.) };
+    let face = if monospace { ty::code() } else { ty::small() };
     let galley = ui.painter().layout_no_wrap(text.into(), face, fg);
     let width = (galley.size().x + 14.).min(310.);
     let (r, response) = ui.allocate_exact_size(vec2(width, 22.), Sense::hover());
@@ -271,13 +332,13 @@ pub(super) fn nav(
     if selected {
         p.rect_filled(Rect::from_min_size(r.min, vec2(2., 34.)), 1, col::blue());
     }
-    let face = if selected { bold(13.) } else { font(13.) };
+    let face = if selected { ty::strong() } else { ty::body() };
     let mut job = text::LayoutJob::simple_singleline(text.to_owned(), face, col::text());
     let reserved = if trailing.is_empty() {
         20.
     } else {
         let tag_width = p
-            .layout_no_wrap(trailing.to_owned(), font(11.), col::muted())
+            .layout_no_wrap(trailing.to_owned(), ty::caption(), col::muted())
             .size()
             .x;
         30. + tag_width
@@ -291,7 +352,7 @@ pub(super) fn nav(
         r.left_center() + vec2(10., 0.),
         Align2::LEFT_CENTER,
         glyph,
-        font(15.),
+        ty::icon(),
         if selected { col::blue() } else { col::muted() },
     );
     p.galley(
@@ -315,7 +376,7 @@ pub(super) fn nav(
                 b.center(),
                 Align2::CENTER_CENTER,
                 trailing,
-                font(11.),
+                ty::caption(),
                 col::amber(),
             );
         } else {
@@ -323,7 +384,7 @@ pub(super) fn nav(
                 r.right_center() - vec2(10., 0.),
                 Align2::RIGHT_CENTER,
                 trailing,
-                font(11.),
+                ty::caption(),
                 col::muted(),
             );
         }
@@ -445,7 +506,7 @@ pub(super) fn filter(
     let response = ui
         .add_sized(
             [width, 36.],
-            Button::new(RichText::new(&label).size(13.))
+            Button::new(RichText::new(&label).size(ty::BODY))
                 .truncate()
                 .fill(col::panel())
                 .stroke(Stroke::new(1_f32, col::edge())),
@@ -489,7 +550,7 @@ pub(super) fn add_partner_button(ui: &mut Ui) -> bool {
         r.left_center() + vec2(10., 0.),
         Align2::LEFT_CENTER,
         &with_icon(icon::PLUS, "Add partner"),
-        font(13.),
+        ty::body(),
         col::muted(),
     );
     res.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Add partner"));
@@ -576,7 +637,7 @@ pub(super) fn empty_state(ui: &mut Ui, title: &str, text: &str, actions: impl Fn
     ui.add_space(GAP_XL);
     ui.vertical(|ui| {
         ui.set_max_width(460.);
-        ui.label(RichText::new(title).font(bold(15.)));
+        ui.label(RichText::new(title).font(ty::section()));
         ui.add_space(GAP_XS);
         ui.label(RichText::new(text).color(col::secondary_text()));
         ui.add_space(GAP_M);

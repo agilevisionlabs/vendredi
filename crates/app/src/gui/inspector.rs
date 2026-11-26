@@ -177,7 +177,7 @@ impl Desktop {
                         } else {
                             &row.kind
                         })
-                        .font(mono_bold(18.)),
+                        .font(ty::code_display()),
                     );
                     if !row.version.is_empty() {
                         badge(
@@ -210,7 +210,7 @@ impl Desktop {
                         .iter()
                         .map(|g| format!("GS {} · {}", text(g, "reference"), text(g, "sets")))
                         .collect();
-                    ui.label(muted(summary.join("   ")).monospace().size(11.));
+                    ui.label(muted(summary.join("   ")).monospace().size(ty::CAPTION));
                 }
                 let source = if row.outgoing {
                     "Sent by partner"
@@ -275,11 +275,11 @@ impl Desktop {
                                 if last { col::blue() } else { col::bg() },
                                 Stroke::new(1.0_f32, if last { col::blue() } else { col::edge() }),
                             );
-                            ui.label(RichText::new(&step.title).font(bold(13.)));
+                            ui.label(RichText::new(&step.title).font(ty::strong()));
                             if !step.note.is_empty() {
                                 ui.label(
                                     RichText::new(&step.note)
-                                        .size(12.)
+                                        .size(ty::SMALL)
                                         .color(col::secondary_text()),
                                 );
                             }
@@ -294,7 +294,7 @@ impl Desktop {
                                     .link(
                                         RichText::new(label)
                                             .monospace()
-                                            .size(12.)
+                                            .size(ty::SMALL)
                                             .color(col::blue())
                                             .underline(),
                                     )
@@ -348,7 +348,7 @@ impl Desktop {
                 let width = label.len() as f32 * 6.5 + 16.;
                 let response = ui.add_sized(
                     [width, 36.],
-                    Button::new(RichText::new(label).size(12.).color(if active {
+                    Button::new(RichText::new(label).size(ty::SMALL).color(if active {
                         col::text()
                     } else {
                         col::muted()
@@ -493,7 +493,7 @@ impl Desktop {
                         row.left_center() + vec2(30., 0.),
                         Align2::RIGHT_CENTER,
                         (i + 1).to_string(),
-                        mono(12.),
+                        ty::code(),
                         col::muted(),
                     );
                     let raw = text(seg, "raw");
@@ -512,14 +512,14 @@ impl Desktop {
                         tag,
                         offset,
                         &hits,
-                        TextFormat::simple(mono(12.), tag_color),
+                        TextFormat::simple(ty::code(), tag_color),
                     );
                     search::append(
                         &mut job,
                         &raw[tag.len()..],
                         offset + tag.len(),
                         &hits,
-                        TextFormat::simple(mono(12.), col::text()),
+                        TextFormat::simple(ty::code(), col::text()),
                     );
                     let galley = ui.painter().layout_job(job);
                     let pos = Align2::LEFT_CENTER

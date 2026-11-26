@@ -241,12 +241,12 @@ impl PartnerForm {
         header.append(
             &format!("{} settings", p.standard.label()),
             0.,
-            egui::TextFormat::simple(font(13.), col::text()),
+            egui::TextFormat::simple(ty::body(), col::text()),
         );
         header.append(
             &summary,
             12.,
-            egui::TextFormat::simple(font(12.), col::muted()),
+            egui::TextFormat::simple(ty::small(), col::muted()),
         );
         let options = egui::CollapsingHeader::new(header).id_salt("partner EDI settings");
         options.show(ui, |ui| {
@@ -307,7 +307,7 @@ impl PartnerForm {
         ui.add_space(2.);
         let mut add = None;
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Intake channels").font(bold(15.)));
+            ui.label(RichText::new("Intake channels").font(ty::section()));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.menu_button(RichText::new("+ Add channel").color(col::blue()), |ui| {
                     if ui.button("Folder").clicked() {
@@ -376,7 +376,7 @@ impl PartnerForm {
         let folder = matches!(p.send, SendChannel::Folder { .. });
         let mut use_folder = folder;
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Reply channel").font(bold(15.)));
+            ui.label(RichText::new("Reply channel").font(ty::section()));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ComboBox::from_id_salt("reply transport")
                     .selected_text(if folder { "Folder" } else { "HTTP" })
@@ -602,7 +602,7 @@ impl Desktop {
                 ui.label(
                     RichText::new(format!("{} of {} · {}", step + 1, STEPS.len(), STEPS[step]))
                         .color(col::blue())
-                        .font(bold(12.)),
+                        .font(ty::label()),
                 );
                 ui.add_space(GAP_XS);
             }

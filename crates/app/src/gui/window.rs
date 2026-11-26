@@ -263,7 +263,7 @@ impl Desktop {
                 field.inner.rect.left_center() + vec2(15., 0.),
                 Align2::CENTER_CENTER,
                 icon::MAGNIFYING_GLASS,
-                font(15.),
+                ty::icon(),
                 col::muted(),
             );
             let tip = shortcuts::hint(ui.ctx(), "Search traffic", &shortcuts::SEARCH);
@@ -313,7 +313,7 @@ impl Desktop {
                         head.left_center() + vec2(cols[i] * w + 12., 0.),
                         Align2::LEFT_CENTER,
                         name,
-                        font(11.),
+                        ty::caption(),
                         col::muted(),
                     );
                 }
@@ -393,7 +393,7 @@ impl Desktop {
                             color,
                         );
                     };
-                    cell(0, &time(t.time), mono(12.), col::muted());
+                    cell(0, &time(t.time), ty::code(), col::muted());
                     let chip = Rect::from_center_size(
                         row.left_center() + vec2(cols[1] * w + 30., 0.),
                         vec2(37., 18.),
@@ -410,16 +410,16 @@ impl Desktop {
                         chip.center(),
                         Align2::CENTER_CENTER,
                         t.direction_label(),
-                        font(11.),
+                        ty::caption(),
                         if t.outgoing { col::secondary_text() } else { col::bg() },
                     );
-                    cell(2, &t.partner, font(13.), col::text());
-                    cell(3, &t.kind, mono_bold(12.), col::text());
-                    cell(4, &t.reference, mono(12.), col::muted());
+                    cell(2, &t.partner, ty::body(), col::text());
+                    cell(3, &t.kind, ty::code_strong(), col::text());
+                    cell(4, &t.reference, ty::code(), col::muted());
                     cell(
                         5,
                         &t.status_label(),
-                        font(13.),
+                        ty::body(),
                         if t.attention { col::amber() } else { col::text() },
                     );
                     response.widget_info(|| {
@@ -512,8 +512,8 @@ impl Desktop {
         ui.horizontal(|ui| {
             ui.add_space(GAP_S);
             ui.vertical(|ui| {
-                ui.label(RichText::new("Vendredi").font(bold(15.)));
-                ui.add(Label::new(muted(short).monospace().size(11.)).truncate())
+                ui.label(RichText::new("Vendredi").font(ty::section()));
+                ui.add(Label::new(muted(short).monospace().size(ty::CAPTION)).truncate())
                     .on_hover_text(path);
             });
         });
@@ -580,7 +580,11 @@ impl Desktop {
                             Stroke::new(1.5_f32, dot.gamma_multiply(1. - pulse)),
                         );
                     }
-                    ui.label(RichText::new(label).size(11.).color(col::secondary_text()));
+                    ui.label(
+                        RichText::new(label)
+                            .size(ty::CAPTION)
+                            .color(col::secondary_text()),
+                    );
                 })
                 .response
                 .on_hover_text(detail);
@@ -650,14 +654,14 @@ impl Desktop {
                 target.center() - vec2(0., 12.),
                 Align2::CENTER_CENTER,
                 "Drop to send or import",
-                bold(20.),
+                ty::title(),
                 col::text(),
             );
             painter.text(
                 target.center() + vec2(0., 16.),
                 Align2::CENTER_CENTER,
                 "An EDI document or script is sent to a partner. A case file or folder is imported.",
-                font(13.),
+                ty::body(),
                 col::muted(),
             );
         }

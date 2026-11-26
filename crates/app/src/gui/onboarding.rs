@@ -132,7 +132,7 @@ impl Desktop {
                 section_row(ui, |ui| {
                     ui.label(
                         RichText::new("Getting started")
-                            .font(bold(12.))
+                            .font(ty::label())
                             .color(col::blue()),
                     );
                     ui.add_space(GAP_S);
@@ -144,7 +144,7 @@ impl Desktop {
                     {
                         ui.label(
                             RichText::new(format!("{} of {} · {label}", i + 1, steps.len()))
-                                .size(12.)
+                                .size(ty::SMALL)
                                 .color(col::secondary_text()),
                         );
                         if small_button(ui, "Go").clicked() {
@@ -164,7 +164,7 @@ impl Desktop {
                         };
                         ui.label(
                             RichText::new(format!("{mark} {label}"))
-                                .size(12.)
+                                .size(ty::SMALL)
                                 .color(color),
                         );
                         if Some(*step) == next {

@@ -211,9 +211,9 @@ impl Session {
             )
             .show(ctx, |ui| {
                 ui.set_max_width(640.);
-                ui.label(RichText::new("Couldn’t open the workspace").font(bold(22.)));
+                ui.label(RichText::new("Couldn’t open the workspace").font(ty::title()));
                 ui.add_space(GAP_S);
-                ui.label(RichText::new(&explained.text).size(15.));
+                ui.label(RichText::new(&explained.text).size(ty::LEAD));
                 ui.add_space(GAP_XS);
                 ui.label(muted(root.display().to_string()).monospace());
                 ui.add_space(GAP_L);
@@ -258,13 +258,13 @@ impl Session {
                     ui.add_space(left);
                     ui.vertical(|ui| {
                         ui.set_width(width);
-                        ui.label(RichText::new("Welcome to Vendredi").font(bold(26.)));
+                        ui.label(RichText::new("Welcome to Vendredi").font(ty::display()));
                         ui.add_space(GAP_XS);
                         ui.label(
                             RichText::new(
                                 "Stand in for your trading partners. Receive EDIFACT and X12, answer with acknowledgements and replies, and rehearse every failure before it happens in production.",
                             )
-                            .size(14.)
+                            .size(ty::LEAD)
                             .color(col::secondary_text()),
                         );
                         ui.add_space(GAP_XL);
@@ -349,7 +349,7 @@ fn choice_card(ui: &mut egui::Ui, glyph: &str, title: &str, text: &str) -> egui:
                 ui.label(RichText::new(glyph).size(24.).color(col::blue()));
                 ui.add_space(GAP_S);
                 ui.vertical(|ui| {
-                    ui.label(RichText::new(title).font(bold(15.)).color(col::text()));
+                    ui.label(RichText::new(title).font(ty::section()).color(col::text()));
                     ui.label(RichText::new(text).color(col::secondary_text()));
                 });
             });
