@@ -626,6 +626,71 @@ impl Desktop {
                 }
             });
         });
+        if let View::Partner(i) = self.view {
+            self.partner_status(ui, i);
+        }
+    }
+
+    /// Whether a partner is working: where it sends, when it last sent and
+    /// received, and what needs attention, with the address ready to copy.
+    fn partner_status(&mut self, ui: &mut Ui, i: usize) {
+        let name = &self.workspace.partners[i].name;
+        let mine: Vec<_> = self
+            .transfers
+            .values()
+            .filter(|t| &t.partner == name)
+            .collect();
+        let last = |outgoing: bool| {
+            mine.iter()
+                .filter(|t| t.outgoing == outgoing)
+                .map(|t| t.time)
+                .max()
+                .map_or_else(|| "never".to_owned(), time)
+        };
+        let attention = mine.iter().filter(|t| t.attention).count();
+        let mut facts = vec![
+            format!("Last received {}", last(false)),
+            format!("last sent {}", last(true)),
+        ];
+        if attention > 0 {
+            facts.push(format!(
+                "{attention} transfer{} need{} attention",
+                if attention == 1 { "" } else { "s" },
+                if attention == 1 { "s" } else { "" }
+            ));
+        }
+        let url = self.receive_url(i);
+        let mut copy = None;
+        ui.add_space(GAP_XS);
+        section_row(ui, |ui| {
+            if let Some(url) = &url {
+                ui.label(muted(url).monospace());
+                if small_button(ui, &with_icon(icon::COPY, "URL")).clicked() {
+                    copy = Some((url.clone(), "URL copied"));
+                }
+                let curl = format!("curl -i --data-binary @order.edi {url}");
+                if small_button(ui, &with_icon(icon::COPY, "curl"))
+                    .on_hover_text(&curl)
+                    .clicked()
+                {
+                    copy = Some((curl, "curl command copied"));
+                }
+                ui.add_space(GAP_S);
+            }
+            ui.label(
+                RichText::new(facts.join(" · "))
+                    .size(ty::SMALL)
+                    .color(if attention > 0 {
+                        col::amber()
+                    } else {
+                        col::muted()
+                    }),
+            );
+        });
+        if let Some((text, done)) = copy {
+            ui.ctx().copy_text(text);
+            self.status = done.into();
+        }
     }
 
     /// Files dragged onto the window: an EDI document or script opens the
