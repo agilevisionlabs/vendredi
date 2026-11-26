@@ -136,4 +136,6 @@ Checked since:
 
 - Windows, running: the Windows build's tests ran under Wine in an x86-64 Linux container. Core (41), the app's unit tests and the desktop and listener tests (27) all pass. The run found a real bug, missing-file messages dropping the drive letter of Windows paths, and tests that assumed Unix paths and file locking; all fixed.
 
-Left to CI: the native Windows run with Microsoft's toolchain and the release packaging (`windows-x64` in `.github/workflows/verify.yml`), which runs on the first push.
+- Every platform natively, in CI: the Verify workflow built, tested and packaged macOS (Apple silicon and Intel), Windows (Microsoft's toolchain) and Linux (x64 and ARM64) on `main` and again for the `v0.2.0` tag, which published Vendredi 0.2.0 with signed and notarized Mac apps.
+
+Nothing in this plan is left open.
