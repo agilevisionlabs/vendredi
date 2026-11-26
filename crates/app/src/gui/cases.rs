@@ -158,6 +158,16 @@ fn case_frame(fill: egui::Color32, stroke: egui::Color32) -> egui::Frame {
         .inner_margin(egui::Margin::symmetric(16, 12))
 }
 
+/// The heading line of a card section, as tall as its small buttons.
+fn section_row(ui: &mut Ui, contents: impl FnOnce(&mut Ui)) {
+    let size = egui::vec2(ui.available_width(), SMALL_BUTTON);
+    ui.allocate_ui_with_layout(
+        size,
+        egui::Layout::left_to_right(egui::Align::Center),
+        contents,
+    );
+}
+
 /// The first line of a card: a fixed height, so titles of different sizes
 /// in the two columns share a centre line.
 fn title_row(ui: &mut Ui, contents: impl FnOnce(&mut Ui)) {
@@ -392,8 +402,7 @@ impl Desktop {
         } else if ui
             .add_enabled(
                 compatible,
-                egui::Button::new(format!("Make active for {partner}"))
-                    .min_size(egui::vec2(0., 36.)),
+                styled(&format!("Make active for {partner}"), false, BUTTON),
             )
             .on_disabled_hover_text("This case is written for another EDI standard.")
             .clicked()
@@ -466,12 +475,14 @@ impl Desktop {
             });
         });
         ui.add_space(12.);
-        header_row(ui, |ui| {
+        ui.separator();
+        ui.add_space(8.);
+        section_row(ui, |ui| {
             form::label(ui, "Rules");
             ui.label(muted("The first rule that matches a message runs."));
             if c.source.is_none() {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if button(ui, "Add rule", false).clicked() {
+                    if small_button(ui, "+ Add rule").clicked() {
                         self.rule_form = Some(rules::RuleForm::new(&self.root, c, None));
                     }
                 });
@@ -494,19 +505,18 @@ impl Desktop {
         }
         if !c.samples.is_empty() || !c.initiate.is_empty() {
             ui.add_space(12.);
-            form::label(
-                ui,
-                if active {
-                    "Try it"
-                } else {
-                    "Make the case active to try it"
-                },
-            );
+            ui.separator();
+            ui.add_space(8.);
+            section_row(ui, |ui| {
+                form::label(ui, "Try it");
+                if !active {
+                    ui.label(muted("Make the case active to send its samples."));
+                }
+            });
             ui.add_enabled_ui(active, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     for s in &c.samples {
-                        if ui
-                            .button(format!("Send sample {}", s.name))
+                        if small_button(ui, &format!("Send sample {}", s.name))
                             .on_hover_text("Receive this message as if the integration sent it")
                             .clicked()
                         {
@@ -515,8 +525,7 @@ impl Desktop {
                         }
                     }
                     for i in &c.initiate {
-                        if ui
-                            .button(format!("Partner sends {}", i.name))
+                        if small_button(ui, &format!("Partner sends {}", i.name))
                             .on_hover_text("Run this partner-initiated send")
                             .clicked()
                         {
@@ -698,6 +707,59 @@ mod tests {
         click(&mut app, &ctx, "Create case")?;
         assert!(app.case_form.is_none());
         assert_eq!(app.case, "northline-supply");
+        // Buttons in a row share one height and centre line.
+        let output = crate::gui::tests::render(&ctx, vec![], |ctx| app.show(ctx));
+        let rect = |label: &str| {
+            let text = output
+                .shapes
+                .iter()
+                .find_map(|s| match &s.shape {
+                    egui::Shape::Text(t) if t.galley.text() == label => {
+                        Some(t.visual_bounding_rect())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing {label}"));
+            // The button frame is the smallest filled rectangle around the text.
+            output
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Rect(r) if r.rect.contains_rect(text) && r.rect.height() < 60. => {
+                        Some(r.rect)
+                    }
+                    _ => None,
+                })
+                .min_by(|a, b| a.area().total_cmp(&b.area()))
+                .unwrap_or(text)
+        };
+        let row = ["Make active for Supplier", "Duplicate", "Delete"].map(rect);
+        for r in &row {
+            assert_eq!(r.height(), BUTTON, "{row:?}");
+            assert!((r.center().y - row[0].center().y).abs() < 0.5, "{row:?}");
+        }
+        let add = rect("+ Add rule");
+        assert_eq!(add.height(), SMALL_BUTTON);
+        let rules = output
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.text() == "Rules" => {
+                    Some(t.visual_bounding_rect())
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            (rules.center().y - add.center().y).abs() < 1.,
+            "{rules:?} {add:?}"
+        );
+        // The section buttons end at the same right edge as the row above.
+        assert!(
+            (add.right() - row[2].right()).abs() < 0.5,
+            "{add:?} {:?}",
+            row[2]
+        );
         let created = app
             .workspace
             .cases

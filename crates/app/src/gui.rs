@@ -523,7 +523,7 @@ mod tests {
     fn frame(app: &mut Desktop, ctx: &egui::Context, events: Vec<Event>) -> egui::FullOutput {
         render(ctx, events, |ctx| app.show(ctx))
     }
-    fn render(
+    pub(super) fn render(
         ctx: &egui::Context,
         events: Vec<Event>,
         draw: impl FnMut(&egui::Context),

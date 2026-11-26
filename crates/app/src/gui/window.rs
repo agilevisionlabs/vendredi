@@ -491,7 +491,7 @@ impl Desktop {
                 .on_hover_text(detail);
             if let View::Partner(i) = self.view {
                 ui.add_space(10.);
-                if ui.button("Edit partner").clicked() {
+                if button(ui, "Edit partner", false).clicked() {
                     self.open_partner(Some(i));
                 }
                 let can_remove = self.workspace.partners.len() > 1;

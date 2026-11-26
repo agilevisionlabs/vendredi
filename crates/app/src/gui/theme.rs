@@ -220,14 +220,25 @@ pub(super) fn header_row(ui: &mut Ui, contents: impl FnOnce(&mut Ui)) {
     ui.allocate_ui_with_layout(size, Layout::left_to_right(Align::Center), contents);
 }
 
-pub(super) fn button(ui: &mut Ui, label: &str, primary: bool) -> Response {
+/// Every action button has one of two heights: 36 for page and dialog
+/// actions, 28 for actions inside a card section.
+pub(super) const BUTTON: f32 = 36.;
+pub(super) const SMALL_BUTTON: f32 = 28.;
+
+pub(super) fn styled(label: &str, primary: bool, height: f32) -> Button<'_> {
     let text = RichText::new(label).color(if primary { Color32::WHITE } else { TEXT });
-    ui.add(
-        Button::new(text)
-            .min_size(vec2(0., 36.))
-            .fill(if primary { BLUE } else { SURFACE })
-            .stroke(Stroke::new(1.0_f32, if primary { BLUE } else { EDGE })),
-    )
+    Button::new(text)
+        .min_size(vec2(0., height))
+        .fill(if primary { BLUE } else { SURFACE })
+        .stroke(Stroke::new(1.0_f32, if primary { BLUE } else { EDGE }))
+}
+
+pub(super) fn button(ui: &mut Ui, label: &str, primary: bool) -> Response {
+    ui.add(styled(label, primary, BUTTON))
+}
+
+pub(super) fn small_button(ui: &mut Ui, label: &str) -> Response {
+    ui.add(styled(label, false, SMALL_BUTTON))
 }
 
 pub(super) fn filter(

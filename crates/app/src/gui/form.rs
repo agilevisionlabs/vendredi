@@ -79,6 +79,11 @@ pub(super) fn footer(ui: &mut Ui, contents: impl FnOnce(&mut Ui)) {
     });
 }
 
+/// A destructive action, the same height as the buttons beside it.
 pub(super) fn removal_button(label: &str) -> Button<'_> {
-    Button::new(RichText::new(label).color(Color32::WHITE)).fill(Color32::from_rgb(173, 40, 42))
+    let red = Color32::from_rgb(173, 40, 42);
+    Button::new(RichText::new(label).color(Color32::WHITE))
+        .min_size(vec2(0., BUTTON))
+        .fill(red)
+        .stroke(Stroke::new(1.0_f32, red))
 }
