@@ -134,6 +134,6 @@ Checked since:
 - Linux, in an Ubuntu 24.04 container on Apple silicon, as CI's `linux-arm64` job: core tests, the desktop and listener tests, the build and the 13 end-to-end tests all pass.
 - Windows, by cross-compiling for `x86_64-pc-windows-gnu` with MinGW in the same container: it builds without warnings. That check found that New partner and Import cases had no shortcut outside the macOS menu; ⇧⌘N and ⌘I now work in the window on every platform.
 
-Not checked:
+- Windows, running: the Windows build's tests ran under Wine in an x86-64 Linux container. Core (41), the app's unit tests and the desktop and listener tests (27) all pass. The run found a real bug, missing-file messages dropping the drive letter of Windows paths, and tests that assumed Unix paths and file locking; all fixed.
 
-- Running on Windows. Only CI's `windows-x64` job (MSVC, with a software OpenGL driver) runs it, on the first push of this branch.
+Left to CI: the native Windows run with Microsoft's toolchain and the release packaging (`windows-x64` in `.github/workflows/verify.yml`), which runs on the first push.
