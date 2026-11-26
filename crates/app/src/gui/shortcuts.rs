@@ -18,6 +18,49 @@ const PAGES: [(Key, View); 5] = [
 ];
 pub(super) const SEARCH_ID: &str = "traffic search";
 
+/// Something the keyboard or the menu bar asks for.
+#[derive(Clone, PartialEq)]
+pub(super) enum Do {
+    Page(View),
+    Search,
+    New,
+    NewPartner,
+    Send,
+    Save,
+    Import,
+    Reveal,
+    Guide,
+}
+
+/// The handbook the Help menu and empty states link to.
+pub(super) const GUIDE: &str = "https://vendredi.app/guide/";
+
+/// Opens a URL or reveals a file with the system's handler.
+pub(super) fn open_externally(target: &str, reveal: bool) {
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut c = std::process::Command::new("open");
+        if reveal {
+            c.arg("-R");
+        }
+        c
+    };
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut c = std::process::Command::new("explorer");
+        if reveal {
+            c.arg("/select,");
+        }
+        c
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let mut command = {
+        let _ = reveal;
+        std::process::Command::new("xdg-open")
+    };
+    let _ = command.arg(target).spawn();
+}
+
 /// A label with its shortcut, such as `Search (⌘F)`, for hover text.
 pub(super) fn hint(ctx: &egui::Context, label: &str, shortcut: &KeyboardShortcut) -> String {
     format!("{label} ({})", ctx.format_shortcut(shortcut))
@@ -36,6 +79,44 @@ impl Desktop {
             || self.case_form.is_some()
     }
 
+    /// Carries out a keyboard or menu command. Commands wait while a dialog
+    /// is open, except the ones that only open something outside the app.
+    pub(super) fn perform(&mut self, action: Do) {
+        if self.dialog_open() && !matches!(action, Do::Reveal | Do::Guide) {
+            return;
+        }
+        match action {
+            Do::Page(view) => self.navigate(view),
+            Do::Search => {
+                if !matches!(self.view, View::All | View::Attention | View::Partner(_)) {
+                    self.navigate(View::All);
+                }
+                self.focus_search = true;
+            }
+            Do::New if self.view == View::Cases => {
+                self.case_form = Some(cases::CaseForm::New {
+                    name: String::new(),
+                    error: String::new(),
+                });
+            }
+            Do::New | Do::NewPartner => self.open_partner(None),
+            Do::Send => self.open_send(),
+            Do::Save => {
+                if matches!(self.view, View::Documents | View::Config)
+                    && self.edit != self.saved
+                    && let Err(e) = self.save()
+                {
+                    self.file_error = Some(format!("{e:#}"));
+                }
+            }
+            Do::Import => self.open_import(),
+            Do::Reveal => {
+                open_externally(&self.root.join("vendredi.toml").display().to_string(), true)
+            }
+            Do::Guide => open_externally(GUIDE, false),
+        }
+    }
+
     pub(super) fn shortcuts(&mut self, ctx: &egui::Context) {
         if self.dialog_open() {
             return;
@@ -43,34 +124,18 @@ impl Desktop {
         let pressed = |s: &KeyboardShortcut| ctx.input_mut(|i| i.consume_shortcut(s));
         for (key, view) in PAGES {
             if pressed(&KeyboardShortcut::new(Modifiers::COMMAND, key)) {
-                self.navigate(view);
+                self.perform(Do::Page(view));
             }
         }
-        if pressed(&SEARCH) {
-            if !matches!(self.view, View::All | View::Attention | View::Partner(_)) {
-                self.navigate(View::All);
+        for (shortcut, action) in [
+            (SEARCH, Do::Search),
+            (NEW, Do::New),
+            (SEND, Do::Send),
+            (SAVE, Do::Save),
+        ] {
+            if pressed(&shortcut) {
+                self.perform(action);
             }
-            self.focus_search = true;
-        }
-        if pressed(&NEW) {
-            if self.view == View::Cases {
-                self.case_form = Some(cases::CaseForm::New {
-                    name: String::new(),
-                    error: String::new(),
-                });
-            } else {
-                self.open_partner(None);
-            }
-        }
-        if pressed(&SEND) {
-            self.open_send();
-        }
-        if pressed(&SAVE)
-            && matches!(self.view, View::Documents | View::Config)
-            && self.edit != self.saved
-            && let Err(e) = self.save()
-        {
-            self.file_error = Some(format!("{e:#}"));
         }
         // Arrow keys move through the list on the page, unless a text field
         // has the keyboard.

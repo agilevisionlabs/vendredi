@@ -4,6 +4,8 @@ mod history;
 mod inspector;
 #[cfg(test)]
 mod layout_tests;
+#[cfg(target_os = "macos")]
+mod menu;
 mod partners;
 mod rules;
 mod scripts;
@@ -60,11 +62,19 @@ pub fn run(root: PathBuf) -> Result<()> {
 struct Session {
     root: PathBuf,
     desktop: Result<Desktop>,
+    /// Kept alive for as long as the menu bar shows it.
+    #[cfg(target_os = "macos")]
+    _menu: Option<muda::Menu>,
 }
 impl Session {
     fn open(root: PathBuf, ctx: &egui::Context) -> Self {
         let desktop = Desktop::open(root.clone(), ctx);
-        Self { root, desktop }
+        Self {
+            root,
+            desktop,
+            #[cfg(target_os = "macos")]
+            _menu: menu::install(ctx).ok(),
+        }
     }
     fn show(&mut self, ctx: &egui::Context) {
         match &mut self.desktop {
@@ -92,6 +102,12 @@ impl Session {
 }
 impl eframe::App for Session {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        #[cfg(target_os = "macos")]
+        if let Ok(app) = &mut self.desktop {
+            for action in menu::pending() {
+                app.perform(action);
+            }
+        }
         self.show(ctx);
     }
     /// Remembers the page per workspace. eframe keeps the window size and
