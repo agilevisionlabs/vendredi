@@ -18,6 +18,8 @@ mod send;
 mod session;
 mod settings;
 mod shortcuts;
+#[cfg(test)]
+mod snapshot;
 mod support;
 mod theme;
 mod toast;
