@@ -85,14 +85,22 @@ def https_library(root):
     """Serve the starter cases and some broken sources over local HTTPS."""
     authority, server_key, server_cert = root / "ca.pem", root / "server.key", root / "server.pem"
     openssl = lambda *args: subprocess.run(["openssl", *args], check=True, capture_output=True)
-    openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-keyout", root / "ca.key",
-            "-out", authority, "-subj", "/CN=Vendredi test CA",
-            "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign")
-    openssl("req", "-newkey", "rsa:2048", "-nodes", "-keyout", server_key, "-out", root / "server.csr",
-            "-subj", "/CN=127.0.0.1")
+    # A config of our own, so the machine's openssl.cnf adds nothing: a CA with
+    # duplicated extensions is valid to some tools and rejected by rustls.
+    config = root / "openssl.cnf"
+    # Names come only from -subj: with "prompt = no" LibreSSL ignores -subj.
+    config.write_text("[req]\ndistinguished_name = name\n\n[name]\n\n"
+                      "[authority]\nbasicConstraints = critical,CA:TRUE\n"
+                      "keyUsage = critical,keyCertSign\nsubjectKeyIdentifier = hash\n")
+    openssl("req", "-config", config, "-x509", "-extensions", "authority", "-newkey", "rsa:2048", "-nodes",
+            "-days", "1", "-keyout", root / "ca.key", "-out", authority, "-subj", "/CN=Vendredi test CA")
+    openssl("req", "-config", config, "-newkey", "rsa:2048", "-nodes", "-keyout", server_key,
+            "-out", root / "server.csr", "-subj", "/CN=127.0.0.1")
     (root / "server.ext").write_text("basicConstraints=CA:FALSE\nsubjectAltName=IP:127.0.0.1\n")
     openssl("x509", "-req", "-in", root / "server.csr", "-CA", authority, "-CAkey", root / "ca.key",
             "-CAcreateserial", "-days", "1", "-out", server_cert, "-extfile", root / "server.ext")
+    # The chain must verify with the same tool, whatever openssl this machine has.
+    openssl("verify", "-CAfile", authority, server_cert)
     broken = json.loads((CASES / "reject-orders.json").read_text())
     broken["files"]["nack.edi"] = "not EDIFACT"
     extra = {
@@ -416,6 +424,10 @@ class LocalExchange(unittest.TestCase):
         self.assertIn("Imported 13 cases", result.stdout)
         with https_library(self.root) as (base, certificate):
             env = dict(os.environ, SSL_CERT_FILE=str(certificate))
+            # What a failure on another machine needs to be understood.
+            tools = subprocess.run(["openssl", "version"], capture_output=True, text=True).stdout.strip()
+            context = f"openssl: {tools}; SSL variables: " + ", ".join(
+                f"{k}={v}" for k, v in sorted(env.items()) if k.startswith("SSL_"))
             untrusted = run(remote, f"{base}/catalog.json")
             self.assertNotEqual(untrusted.returncode, 0)
             self.assertFalse((remote / "cases").exists())
@@ -428,10 +440,10 @@ class LocalExchange(unittest.TestCase):
                 with self.subTest(source=source):
                     result = run(remote, source, env=env)
                     self.assertNotEqual(result.returncode, 0)
-                    self.assertIn(message, result.stderr)
+                    self.assertIn(message, result.stderr, context)
                     self.assertFalse((remote / "cases").exists())
             result = run(remote, f"{base}/catalog.json", env=env)
-            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.returncode, 0, result.stderr + context)
             source = json.loads((remote / "cases/send-invoice/.vendredi-source.json").read_text())
             self.assertEqual(source["source"], f"{base}/send-invoice.json")
         self.assertEqual(snapshot(folder / "cases"), snapshot(remote / "cases"))
