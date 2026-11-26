@@ -699,7 +699,7 @@ send = { directory = "freight-out" }
         assert!(!app.listening);
         assert!(app.status.contains("Could not start listening"));
         drop(occupied);
-        click(&mut app, &ctx, "▷  Start")?;
+        click(&mut app, &ctx, "▷  Resume")?;
         let until = Instant::now() + Duration::from_secs(8);
         while !app.listening {
             ensure!(Instant::now() < until, "start timed out");
@@ -972,9 +972,9 @@ send = { directory = "freight-out" }
         wait_for(&mut app, "replay", |app| {
             app.transfers.values().filter(|r| !r.outgoing).count() == 2
         })?;
-        click(&mut app, &ctx, "▪  Stop")?;
+        click(&mut app, &ctx, "⏸  Pause")?;
         wait_for(&mut app, "listener stop", |app| !app.listening)?;
-        click(&mut app, &ctx, "▷  Start")?;
+        click(&mut app, &ctx, "▷  Resume")?;
         wait_for(&mut app, "listener restart", |app| app.listening)?;
         click(&mut app, &ctx, "Settings")?;
         click(&mut app, &ctx, "Edit configuration file")?;

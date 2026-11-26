@@ -4,63 +4,6 @@ impl Desktop {
     pub(super) fn show(&mut self, ctx: &egui::Context) {
         self.dispatch_search(ctx);
         self.drain();
-        TopBottomPanel::top("header")
-            .exact_height(52.)
-            .frame(
-                Frame::new()
-                    .fill(PANEL)
-                    .inner_margin(Margin::symmetric(16, 8)),
-            )
-            .show(ctx, |ui| {
-                ui.horizontal_centered(|ui| {
-                    ui.label(RichText::new("Vendredi").font(bold(15.)));
-                    let path = self.root.display().to_string();
-                    let short = std::env::var_os("HOME")
-                        .and_then(|h| self.root.strip_prefix(h).ok())
-                        .map(|p| format!("~/{}", p.display()))
-                        .unwrap_or_else(|| path.clone());
-                    if ui.available_width() > 800. {
-                        badge(ui, &short, SECONDARY_TEXT, SURFACE, true);
-                    }
-                    ui.colored_label(if self.listening { GREEN } else { MUTED }, "●");
-                    ui.label(
-                        RichText::new(if self.listening { "Running" } else { "Stopped" })
-                            .font(bold(13.)),
-                    );
-                    let n = self
-                        .workspace
-                        .partners
-                        .iter()
-                        .flat_map(|p| &p.receive)
-                        .filter(|r| matches!(r, Receive::Folder { .. }))
-                        .count();
-                    if ui.available_width() > 440. && self.listening {
-                        ui.label(muted(format!(
-                            "HTTP on :{} · {n} folder{} watched",
-                            self.address.port(),
-                            if n == 1 { "" } else { "s" }
-                        )));
-                    }
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if button(ui, "→  Send document…", true).clicked() {
-                            self.open_send();
-                        }
-                        if button(
-                            ui,
-                            if self.listening {
-                                "▪  Stop"
-                            } else {
-                                "▷  Start"
-                            },
-                            false,
-                        )
-                        .clicked()
-                        {
-                            self.command(Command::Listen(!self.listening));
-                        }
-                    });
-                });
-            });
         let count = self.transfers.values().filter(|t| self.visible(t)).count();
         let attention = self.transfers.values().filter(|t| t.attention).count();
         TopBottomPanel::bottom("footer")
@@ -109,6 +52,8 @@ impl Desktop {
             .show(ctx, |ui| {
                 ScrollArea::vertical().show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 2.;
+                    self.workspace_title(ui);
+                    ui.add_space(16.);
                     section(ui, "  TRAFFIC");
                     ui.add_space(6.);
                     if nav(ui, "All traffic", "", self.view == View::All, false) {
@@ -203,25 +148,15 @@ impl Desktop {
                     Frame::new().inner_margin(16).show(ui, |ui| self.editor(ui));
                     return;
                 }
-                if let View::Partner(i) = self.view {
-                    Frame::new().inner_margin(12).show(ui, |ui| {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.heading(&self.workspace.partners[i].name);
-                            if ui.button("Edit partner").clicked() {
-                                self.open_partner(Some(i));
-                            }
-                            let can_remove = self.workspace.partners.len() > 1;
-                            if ui
-                                .add_enabled(can_remove, form::removal_button("Remove partner"))
-                                .on_disabled_hover_text("The workspace needs at least one partner.")
-                                .clicked()
-                            {
-                                self.partner_removal = Some(partners::PartnerRemoval::new(i));
-                            }
-                        });
-                    });
-                    ui.separator();
-                }
+                Frame::new()
+                    .inner_margin(Margin {
+                        left: 16,
+                        right: 16,
+                        top: 12,
+                        bottom: 8,
+                    })
+                    .show(ui, |ui| self.traffic_header(ui));
+                ui.separator();
                 let r = ui.available_rect_before_wrap();
                 if r.width() < 880. && r.height() < 485. {
                     if self.compact_detail && self.selected.is_some() {
@@ -493,5 +428,98 @@ impl Desktop {
         self.rule_dialog(ctx);
         self.import_dialog(ctx);
         self.settings_dialog(ctx);
+    }
+
+    /// The workspace name and folder, above the navigation.
+    fn workspace_title(&self, ui: &mut Ui) {
+        let path = self.root.display().to_string();
+        let short = std::env::var_os("HOME")
+            .and_then(|h| self.root.strip_prefix(h).ok())
+            .map(|p| format!("~/{}", p.display()))
+            .unwrap_or_else(|| path.clone());
+        ui.horizontal(|ui| {
+            ui.add_space(8.);
+            ui.vertical(|ui| {
+                ui.label(RichText::new("Vendredi").font(bold(15.)));
+                ui.add(Label::new(muted(short).monospace().size(11.)).truncate())
+                    .on_hover_text(path);
+            });
+        });
+    }
+
+    /// The heading of the traffic views, with whether Vendredi is receiving
+    /// and the actions that belong to traffic.
+    fn traffic_header(&mut self, ui: &mut Ui) {
+        let title = match self.view {
+            View::Partner(i) => self.workspace.partners[i].name.clone(),
+            View::Attention => "Needs attention".into(),
+            _ => "All traffic".into(),
+        };
+        header_row(ui, |ui| {
+            ui.heading(title);
+            ui.add_space(10.);
+            let folders = self
+                .workspace
+                .partners
+                .iter()
+                .flat_map(|p| &p.receive)
+                .filter(|r| matches!(r, Receive::Folder { .. }))
+                .count();
+            let (dot, label, detail) = if self.listening {
+                (
+                    GREEN,
+                    "Working",
+                    format!(
+                        "Receiving: HTTP on :{} · {folders} folder{} watched",
+                        self.address.port(),
+                        if folders == 1 { "" } else { "s" }
+                    ),
+                )
+            } else {
+                (
+                    MUTED,
+                    "Paused",
+                    "Not receiving: HTTP and folders are off until you resume".to_owned(),
+                )
+            };
+            Frame::new()
+                .fill(SURFACE)
+                .corner_radius(10)
+                .inner_margin(Margin::symmetric(8, 2))
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.x = 4.;
+                    ui.label(RichText::new("●").size(9.).color(dot));
+                    ui.label(RichText::new(label).size(11.).color(SECONDARY_TEXT));
+                })
+                .response
+                .on_hover_text(detail);
+            if let View::Partner(i) = self.view {
+                ui.add_space(10.);
+                if ui.button("Edit partner").clicked() {
+                    self.open_partner(Some(i));
+                }
+                let can_remove = self.workspace.partners.len() > 1;
+                if ui
+                    .add_enabled(can_remove, form::removal_button("Remove partner"))
+                    .on_disabled_hover_text("The workspace needs at least one partner.")
+                    .clicked()
+                {
+                    self.partner_removal = Some(partners::PartnerRemoval::new(i));
+                }
+            }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if button(ui, "→  Send document…", true).clicked() {
+                    self.open_send();
+                }
+                let toggle = if self.listening {
+                    "⏸  Pause"
+                } else {
+                    "▷  Resume"
+                };
+                if button(ui, toggle, false).clicked() {
+                    self.command(Command::Listen(!self.listening));
+                }
+            });
+        });
     }
 }

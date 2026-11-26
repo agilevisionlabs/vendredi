@@ -279,3 +279,21 @@ pub(super) fn add_partner_button(ui: &mut Ui) -> bool {
     res.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Add partner"));
     res.clicked()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn button_icons_have_glyphs() {
+        let ctx = Context::default();
+        install(&ctx);
+        let _ = ctx.run(Default::default(), |_| {});
+        for c in ['⏸', '▷', '→', '⏷'] {
+            assert!(
+                ctx.fonts_mut(|f| f.has_glyph(&FontId::proportional(13.), c)),
+                "{c}"
+            );
+        }
+    }
+}
