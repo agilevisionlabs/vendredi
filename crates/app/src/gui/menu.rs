@@ -24,6 +24,8 @@ const ITEMS: &[(&str, &str, Option<&str>)] = &[
     ("preferences", "Settings…", Some("CmdOrCtrl+Comma")),
     ("find", "Search Traffic", Some("CmdOrCtrl+F")),
     ("guide", "Vendredi Guide", None),
+    ("whats-new", "What's New", None),
+    ("report", "Report a Problem…", None),
 ];
 
 fn item(id: &str) -> MenuItem {
@@ -51,6 +53,8 @@ pub(super) fn command(id: &str) -> Option<Do> {
         "settings" | "preferences" => Do::Page(View::Settings),
         "find" => Do::Search,
         "guide" => Do::Guide,
+        "whats-new" => Do::WhatsNew,
+        "report" => Do::Report,
         _ => return None,
     })
 }
@@ -123,7 +127,16 @@ pub(super) fn install(ctx: &egui::Context) -> anyhow::Result<Menu> {
             &PredefinedMenuItem::maximize(None),
         ],
     )?;
-    let help = Submenu::with_items("Help", true, &[&item("guide")])?;
+    let help = Submenu::with_items(
+        "Help",
+        true,
+        &[
+            &item("guide"),
+            &item("whats-new"),
+            &PredefinedMenuItem::separator(),
+            &item("report"),
+        ],
+    )?;
     let menu = Menu::with_items(&[&app, &file, &view, &window, &help])?;
     menu.init_for_nsapp();
     window.set_as_windows_menu_for_nsapp();

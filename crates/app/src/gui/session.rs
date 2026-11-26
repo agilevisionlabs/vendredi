@@ -386,5 +386,6 @@ impl eframe::App for Session {
             .map(|r| r.display().to_string())
             .collect();
         storage.set_string(RECENT, recent.join("\n"));
+        storage.set_string(support::LAST_VERSION, env!("CARGO_PKG_VERSION").into());
     }
 }

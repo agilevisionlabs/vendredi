@@ -61,6 +61,20 @@ impl Desktop {
                         self.navigate(View::Config);
                     }
                 });
+            ui.add_space(GAP_L);
+            form::label(ui, "Help");
+            ui.horizontal(|ui| {
+                for (glyph, label, action) in [
+                    (icon::BOOK_OPEN, "Guide", shortcuts::Do::Guide),
+                    (icon::LIGHTNING, "What's new", shortcuts::Do::WhatsNew),
+                    (icon::WARNING_CIRCLE, "Report a problem", shortcuts::Do::Report),
+                ] {
+                    if small_button(ui, &with_icon(glyph, label)).clicked() {
+                        self.perform(action);
+                    }
+                }
+            });
+            ui.label(muted(format!("Vendredi {}", env!("CARGO_PKG_VERSION"))));
         });
     }
 

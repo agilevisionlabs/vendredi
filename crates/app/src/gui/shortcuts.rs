@@ -30,6 +30,8 @@ pub(super) enum Do {
     Import,
     Reveal,
     Guide,
+    WhatsNew,
+    Report,
     OpenWorkspace,
     NewWorkspace,
     CloseWorkspace,
@@ -79,12 +81,13 @@ impl Desktop {
             || self.settings_form.is_some()
             || self.import.is_some()
             || self.case_form.is_some()
+            || self.report.is_some()
     }
 
     /// Carries out a keyboard or menu command. Commands wait while a dialog
     /// is open, except the ones that only open something outside the app.
     pub(super) fn perform(&mut self, action: Do) {
-        if self.dialog_open() && !matches!(action, Do::Reveal | Do::Guide) {
+        if self.dialog_open() && !matches!(action, Do::Reveal | Do::Guide | Do::WhatsNew) {
             return;
         }
         match action {
@@ -116,6 +119,8 @@ impl Desktop {
                 open_externally(&self.root.join("vendredi.toml").display().to_string(), true)
             }
             Do::Guide => open_externally(GUIDE, false),
+            Do::WhatsNew => open_externally(&support::release_notes_url(), false),
+            Do::Report => self.open_report(),
             // The session switches workspaces; it handles these first.
             Do::OpenWorkspace | Do::NewWorkspace | Do::CloseWorkspace => {}
         }

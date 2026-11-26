@@ -18,6 +18,7 @@ mod send;
 mod session;
 mod settings;
 mod shortcuts;
+mod support;
 mod theme;
 mod toast;
 mod window;
@@ -68,6 +69,10 @@ pub fn run(root: Option<PathBuf>) -> Result<()> {
             }
             if let (Some(storage), Some(Ok(app))) = (cc.storage, &mut session.desktop) {
                 app.restore(storage.get_string(&place_key(&app.root)).as_deref());
+                let last = storage.get_string(support::LAST_VERSION);
+                if let Some(note) = support::update_note(last.as_deref()) {
+                    app.status = note;
+                }
             }
             Ok(Box::new(session))
         }),
@@ -175,6 +180,10 @@ struct Desktop {
     import: Option<cases::ImportForm>,
     case_form: Option<cases::CaseForm>,
     checks: Option<cases::Checks>,
+    /// The Report a problem text while its dialog is open.
+    report: Option<String>,
+    /// The last failure, for problem reports.
+    last_error: String,
     /// Set by ⌘F; the search field takes the keyboard when it is next drawn.
     focus_search: bool,
     /// Shown as toasts: the last status already shown, whether the next
@@ -261,6 +270,8 @@ impl Desktop {
             import: None,
             case_form: None,
             checks: None,
+            report: None,
+            last_error: String::new(),
             focus_search: false,
             toasted: String::new(),
             status_error: !listening,

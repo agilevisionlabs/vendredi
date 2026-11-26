@@ -34,6 +34,7 @@ impl Desktop {
     /// Reports a failure: shown as an error toast and kept in `status`.
     pub(super) fn fail(&mut self, text: impl Into<String>) {
         self.status = text.into();
+        self.last_error.clone_from(&self.status);
         self.status_error = true;
     }
 

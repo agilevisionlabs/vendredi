@@ -499,6 +499,7 @@ impl Desktop {
         self.rule_dialog(ctx);
         self.import_dialog(ctx);
         self.case_dialog(ctx);
+        self.report_dialog(ctx);
         self.settings_dialog(ctx);
     }
 
