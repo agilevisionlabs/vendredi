@@ -260,6 +260,8 @@ struct Desktop {
     pending_undo: Option<toast::Undo>,
     toast_list: Vec<toast::Toast>,
     toast_count: u64,
+    /// When each transfer first appeared, in `egui` time, for the arrival glow.
+    arrivals: BTreeMap<i64, f64>,
     send_file: String,
     function: String,
     config_source: String,
@@ -336,6 +338,7 @@ impl Desktop {
             pending_undo: None,
             toast_list: Vec::new(),
             toast_count: 0,
+            arrivals: BTreeMap::new(),
             send_file: String::new(),
             function: String::new(),
             edit_file,

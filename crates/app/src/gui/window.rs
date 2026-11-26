@@ -1,5 +1,8 @@
 use super::*;
 use eframe::egui::*;
+
+/// Seconds a newly arrived transfer stays highlighted.
+const ARRIVAL_GLOW: f64 = 1.6;
 impl Desktop {
     pub(super) fn show(&mut self, ctx: &egui::Context) {
         self.dispatch_search(ctx);
@@ -306,12 +309,33 @@ impl Desktop {
                     .rev()
                     .filter(|t| self.visible(t))
                     .collect();
+                let now = ui.input(|i| i.time);
+                // Rows present when the window opened are not new.
+                if self.arrivals.is_empty() {
+                    self.arrivals.extend(self.transfers.keys().map(|id| (*id, f64::NEG_INFINITY)));
+                }
+                for t in &rows {
+                    self.arrivals.entry(t.id).or_insert(now);
+                }
+                let mut fresh = false;
                 for t in &rows {
                     let (row, response) = ui.allocate_exact_size(vec2(w, 37.), Sense::click());
                     let selected = self.selected == Some(t.id);
                     if selected || response.hovered() {
                         ui.painter()
                             .rect_filled(row, 0, if selected { SELECTED } else { PANEL });
+                    } else {
+                        // A new transfer glows for a moment as it arrives.
+                        let age = now - self.arrivals[&t.id];
+                        if age < ARRIVAL_GLOW {
+                            fresh = true;
+                            let strength = 1. - (age / ARRIVAL_GLOW) as f32;
+                            ui.painter().rect_filled(
+                                row,
+                                0,
+                                SELECTED.gamma_multiply(strength.powi(2)),
+                            );
+                        }
                     }
                     if selected {
                         ui.painter().rect_filled(
@@ -398,6 +422,9 @@ impl Desktop {
                     {
                         pick = Some(t.id);
                     }
+                }
+                if fresh {
+                    ui.ctx().request_repaint();
                 }
                 if rows.is_empty() {
                     Frame::new().inner_margin(PAGE_MARGIN).show(ui, |ui| {
@@ -513,13 +540,32 @@ impl Desktop {
                     "Not receiving: HTTP and folders are off until you resume".to_owned(),
                 )
             };
+            // The dot pulses briefly when a message arrives.
+            let now = ui.input(|i| i.time);
+            let latest = self
+                .arrivals
+                .values()
+                .copied()
+                .fold(f64::NEG_INFINITY, f64::max);
+            let pulse = ((now - latest) / ARRIVAL_GLOW).clamp(0., 1.) as f32;
+            if pulse < 1. {
+                ui.ctx().request_repaint();
+            }
             Frame::new()
                 .fill(SURFACE)
                 .corner_radius(10)
                 .inner_margin(Margin::symmetric(8, 2))
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing.x = 4.;
-                    ui.label(RichText::new("●").size(9.).color(dot));
+                    let mark = ui.label(RichText::new("●").size(9.).color(dot));
+                    if pulse < 1. {
+                        // A ring spreads from the dot and fades, without moving the row.
+                        ui.painter().circle_stroke(
+                            mark.rect.center(),
+                            3. + 7. * pulse,
+                            Stroke::new(1.5_f32, dot.gamma_multiply(1. - pulse)),
+                        );
+                    }
                     ui.label(RichText::new(label).size(11.).color(SECONDARY_TEXT));
                 })
                 .response
