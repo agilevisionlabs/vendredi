@@ -1027,7 +1027,13 @@ send = { directory = "freight-out" }
         assert!(app.view == View::Cases && app.rule_form.is_some());
         click(&mut app, &ctx, "Cancel")?;
         click(&mut app, &ctx, "All traffic")?;
-        click(&mut app, &ctx, "cases/confirm-orders/report.js")?;
+        // Recorded paths use the platform's separator.
+        let link = Path::new("cases")
+            .join("confirm-orders")
+            .join("report.js")
+            .display()
+            .to_string();
+        click(&mut app, &ctx, &link)?;
         assert!(app.view == View::Scripts && app.script_form.is_some());
         frame(
             &mut app,
@@ -1103,7 +1109,14 @@ send = { directory = "freight-out" }
         )?;
         click(&mut app, &ctx, "JavaScript")?;
         // The choices are the active case's scripts, by workspace path.
-        assert_eq!(app.send_file, "cases/confirm-orders/confirm.js");
+        assert_eq!(
+            app.send_file,
+            Path::new("cases")
+                .join("confirm-orders")
+                .join("confirm.js")
+                .display()
+                .to_string()
+        );
         app.send_file = "cases/confirm-orders/report.js".into();
         app.function = "report".into();
         click(&mut app, &ctx, "Send")?;

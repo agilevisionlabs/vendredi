@@ -1566,7 +1566,13 @@ mod tests {
         fs::remove_file(folder.join("confirm.js"))?;
         let error = format!("{:#}", Workspace::load(dir.path()).unwrap_err());
         assert!(
-            error.contains("confirm.js") && error.contains("cases/confirm-orders"),
+            error.contains("confirm.js")
+                && error.contains(
+                    &Path::new("cases")
+                        .join("confirm-orders")
+                        .display()
+                        .to_string()
+                ),
             "{error}"
         );
         fs::remove_dir_all(&folder)?;
@@ -1792,8 +1798,9 @@ mod tests {
         rules(&mut w.partners[0])[0].actions = vec![Action::Fault {
             fault: Fault::Reject,
         }];
-        fs::remove_dir_all(dir.path().join(".vendredi"))?;
+        // Close the engine first: Windows keeps open files from being removed.
         drop(e);
+        fs::remove_dir_all(dir.path().join(".vendredi"))?;
         let mut e = Engine::open(w.clone(), Arc::new(SystemClock))?;
         input(&mut e, 0, single.as_bytes())?;
         let texts: Vec<_> = sent(&mut e).into_iter().map(|(_, t)| t).collect();
