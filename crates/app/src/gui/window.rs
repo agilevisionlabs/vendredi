@@ -123,21 +123,6 @@ impl Desktop {
         CentralPanel::default()
             .frame(Frame::new().fill(BG))
             .show(ctx, |ui| {
-                // Settings the workspace loaded without stay visible until fixed.
-                if !self.workspace.warnings.is_empty() {
-                    Frame::new()
-                        .inner_margin(Margin {
-                            left: 16,
-                            right: 16,
-                            top: 12,
-                            bottom: 0,
-                        })
-                        .show(ui, |ui| {
-                            for warning in &self.workspace.warnings {
-                                notice(ui, warning);
-                            }
-                        });
-                }
                 if self.view == View::Settings {
                     Frame::new()
                         .inner_margin(16)

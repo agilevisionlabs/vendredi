@@ -742,7 +742,7 @@ mod tests {
 
     #[test]
     #[ignore = "opens a local workspace listener"]
-    fn old_partner_rules_open_with_a_warning() -> Result<()> {
+    fn old_partner_rules_are_ignored_quietly() -> Result<()> {
         let dir = tempfile::tempdir()?;
         crate::sample(dir.path())?;
         let file = dir.path().join("vendredi.toml");
@@ -754,10 +754,10 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = Desktop::open(dir.path().into(), &ctx)?;
         assert_eq!(app.workspace.warnings.len(), 1);
+        // The desktop opens normally and does not show the warning.
         click(&mut app, &ctx, "Cases")?;
-        // The warning stays above every page.
         let warning = app.workspace.warnings[0].clone();
-        click(&mut app, &ctx, &warning)?;
+        assert!(click(&mut app, &ctx, &warning).is_err());
         Ok(())
     }
 
