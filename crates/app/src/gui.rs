@@ -2,6 +2,8 @@ mod cases;
 mod form;
 mod history;
 mod inspector;
+#[cfg(test)]
+mod layout_tests;
 mod partners;
 mod rules;
 mod scripts;
@@ -437,7 +439,7 @@ impl Desktop {
             _ => "Workspace configuration",
         };
         ui.heading(title);
-        ui.add_space(8.);
+        ui.add_space(GAP_S);
         if self.files().is_empty() {
             ui.label(format!(
                 "No {} configured in this workspace.",
@@ -523,7 +525,7 @@ mod tests {
     fn frame(app: &mut Desktop, ctx: &egui::Context, events: Vec<Event>) -> egui::FullOutput {
         render(ctx, events, |ctx| app.show(ctx))
     }
-    pub(super) fn render(
+    pub(in crate::gui) fn render(
         ctx: &egui::Context,
         events: Vec<Event>,
         draw: impl FnMut(&egui::Context),
