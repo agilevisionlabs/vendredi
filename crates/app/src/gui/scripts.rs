@@ -505,7 +505,7 @@ impl Desktop {
             }
         });
         ui.add_space(GAP_XS);
-        ui.label(muted(
+        ui.label(prose(
             "Scripts belong to cases and run when one of the case's rules matches.",
         ));
         ui.add_space(GAP_S);

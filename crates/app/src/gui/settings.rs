@@ -53,7 +53,7 @@ impl Desktop {
             egui::CollapsingHeader::new("Advanced")
                 .id_salt("settings advanced")
                 .show(ui, |ui| {
-                    ui.label(muted(
+                    ui.label(prose(
                         "vendredi.toml holds the listener, identity and partners. The settings above and the partner editor change it for you.",
                     ));
                     ui.add_space(GAP_S);

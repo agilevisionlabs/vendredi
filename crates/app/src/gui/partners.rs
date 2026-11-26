@@ -448,7 +448,7 @@ impl PartnerForm {
     fn behaves(&mut self, ui: &mut Ui, workspace: &Workspace) {
         let p = &mut self.partner;
         form::label(ui, "Answer with a case");
-        ui.label(muted(
+        ui.label(prose(
             "A case holds the rules that answer this partner's messages. You can change it any time on the Cases page.",
         ));
         ui.add_space(GAP_XS);
@@ -480,7 +480,7 @@ impl PartnerForm {
                 }
             });
         if cases.is_empty() {
-            ui.label(muted(format!(
+            ui.label(prose(format!(
                 "No {} cases are installed. Install the starter cases on the Cases page.",
                 p.standard.label()
             )));

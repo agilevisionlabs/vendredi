@@ -60,7 +60,7 @@ impl Desktop {
         };
         let mut close = false;
         let escaped = form::modal(ctx, "report a problem", "Report a problem", 560., |ui| {
-            ui.label(muted(
+            ui.label(prose(
                 "This is everything the report contains. Change or remove anything before sending it.",
             ));
             ui.add_space(GAP_XS);

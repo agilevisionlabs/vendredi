@@ -282,6 +282,12 @@ pub(super) fn bold(size: f32) -> FontId {
 pub(super) fn mono_bold(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("Plex SemiBold".into()))
 }
+/// Sentences meant to be read, such as a page's introduction: darker than
+/// `muted` and at body size. `muted` is for metadata and short hints.
+pub(super) fn prose(s: impl Into<String>) -> RichText {
+    RichText::new(s).color(col::secondary_text())
+}
+
 pub(super) fn muted(s: impl Into<String>) -> RichText {
     RichText::new(s).size(ty::SMALL).color(col::muted())
 }

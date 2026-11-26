@@ -67,7 +67,7 @@ impl Desktop {
         let mut start = false;
         let mut install = None;
         let escaped = form::modal(ctx, "import cases", "Import cases", 560., |ui| {
-            ui.label(muted(
+            ui.label(prose(
                 "Enter a case folder, a case or catalog JSON file, or an https:// URL. Nothing is installed until you confirm.",
             ));
             let home = self.root.clone();
@@ -262,7 +262,7 @@ impl Desktop {
             });
         });
         ui.add_space(GAP_S);
-        ui.label(muted(
+        ui.label(prose(
             "A case is a partner scenario: the rules that answer its messages, with samples to try them. \
              The active case answers the partner's traffic.",
         ));
@@ -343,7 +343,7 @@ impl Desktop {
             title_row(ui, |ui| {
                 ui.label(RichText::new("No cases installed").font(ty::strong()));
             });
-            ui.label(muted(
+            ui.label(prose(
                 "Install the starter set of common scenarios, import cases your team keeps in a folder or repository, or start a new one.",
             ));
             ui.add_space(GAP_S);
@@ -508,7 +508,7 @@ impl Desktop {
             }
         });
         if let Some(source) = &c.source {
-            ui.label(muted(format!(
+            ui.label(prose(format!(
                 "Imported from {source}. Importing it again replaces it, so duplicate it to make changes."
             )));
             ui.add_space(GAP_XS);
@@ -572,7 +572,7 @@ impl Desktop {
         self.check_results(ui, c);
         self.expectations(ui, c);
         if c.samples.is_empty() && c.initiate.is_empty() {
-            ui.label(muted(
+            ui.label(prose(
                 "Samples are messages the integration would send. Add one to try the case with a click.",
             ));
         } else {
@@ -687,7 +687,7 @@ impl Desktop {
             }
         });
         if c.initiate.is_empty() {
-            ui.label(muted("Nothing yet. A send here becomes a button above, and a command: initiate <partner> <name>."));
+            ui.label(prose("Nothing yet. A send here becomes a button above, and a command: initiate <partner> <name>."));
         }
         let mut drop = None;
         for i in &c.initiate {
