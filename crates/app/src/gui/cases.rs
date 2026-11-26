@@ -570,6 +570,7 @@ impl Desktop {
             });
         });
         self.check_results(ui, c);
+        self.expectations(ui, c);
         if c.samples.is_empty() && c.initiate.is_empty() {
             ui.label(muted(
                 "Samples are messages the integration would send. Add one to try the case with a click.",
@@ -616,6 +617,137 @@ impl Desktop {
                 }
             }
         }
+    }
+
+    /// The expected replies of each sample, to open and edit by hand or
+    /// remove; and the sends the partner starts on its own.
+    fn expectations(&mut self, ui: &mut Ui, c: &Case) {
+        let editable = c.source.is_none();
+        let folder = Path::new(case::DIRECTORY).join(&c.id);
+        let mut open = None;
+        let mut remove = None;
+        for (i, e) in c.expect.iter().enumerate() {
+            let what = match (&e.sample, &e.initiate) {
+                (Some(s), _) => format!("Sample {s} expects"),
+                (_, Some(i)) => format!("{i} expects"),
+                _ => continue,
+            };
+            ui.push_id(("expect", i), |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(muted(what).size(ty::SMALL));
+                    for reply in &e.replies {
+                        if ui
+                            .link(reply.display().to_string())
+                            .on_hover_text("Open this expected reply in Documents to edit it")
+                            .clicked()
+                        {
+                            open = Some(folder.join(reply));
+                        }
+                    }
+                    if editable
+                        && ui
+                            .add(styled(icon::X, false, SMALL_BUTTON))
+                            .on_hover_text("Remove this expectation")
+                            .clicked()
+                    {
+                        remove = Some(i);
+                    }
+                });
+            });
+        }
+        if let Some(path) = open {
+            self.open_document(path);
+        }
+        if let Some(i) = remove
+            && let Err(e) = self.edit_case(c, "Removed an expectation", |case| {
+                case.expect.remove(i);
+            })
+        {
+            self.fail(format!("{e:#}"));
+        }
+        // Partner-initiated sends: a named document the partner sends by itself.
+        ui.add_space(GAP_S);
+        section_row(ui, |ui| {
+            form::label(ui, "Partner sends on its own");
+            if editable {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if small_button(ui, &with_icon(icon::PLUS, "Add send"))
+                        .on_hover_text("Choose a document the partner sends, such as an invoice")
+                        .clicked()
+                    {
+                        let folder = case::folder(&self.root, &c.id);
+                        if let Some(file) =
+                            form::pick_file(&folder, &[("EDI documents", &["edi", "x12", "txt"])])
+                            && let Err(e) = self.add_send(c, &file)
+                        {
+                            self.fail(format!("{e:#}"));
+                        }
+                    }
+                });
+            }
+        });
+        if c.initiate.is_empty() {
+            ui.label(muted("Nothing yet. A send here becomes a button above, and a command: initiate <partner> <name>."));
+        }
+        let mut drop = None;
+        for i in &c.initiate {
+            ui.horizontal(|ui| {
+                ui.label(&i.name);
+                ui.label(muted(format!(
+                    "{} action{}",
+                    i.actions.len(),
+                    if i.actions.len() == 1 { "" } else { "s" }
+                )));
+                if editable
+                    && ui
+                        .add(styled(icon::X, false, SMALL_BUTTON))
+                        .on_hover_text("Remove this send")
+                        .clicked()
+                {
+                    drop = Some(i.name.clone());
+                }
+            });
+        }
+        if let Some(name) = drop
+            && let Err(e) = self.edit_case(c, &format!("Removed send {name}"), |case| {
+                case.initiate.retain(|i| i.name != name);
+                case.expect
+                    .retain(|e| e.initiate.as_deref() != Some(name.as_str()));
+            })
+        {
+            self.fail(format!("{e:#}"));
+        }
+    }
+
+    /// Adds a partner-initiated send of a chosen document.
+    pub(super) fn add_send(&mut self, c: &Case, file: &Path) -> Result<()> {
+        let folder = case::folder(&self.root, &c.id);
+        vendredi_core::interchange::document(c.standard, &fs::read(file)?).with_context(|| {
+            format!(
+                "{} is not a single {} message",
+                file.display(),
+                c.standard.label()
+            )
+        })?;
+        let inside = form::into_folder(&folder, file)?;
+        let stem = inside
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Send".into());
+        let mut name = stem.clone();
+        for n in 2.. {
+            if !c.initiate.iter().any(|i| i.name == name) {
+                break;
+            }
+            name = format!("{stem} {n}");
+        }
+        let send = case::Initiate {
+            name: name.clone(),
+            actions: vec![Action::Document { document: inside }],
+        };
+        self.edit_case(c, &format!("Added send {name}"), |case| {
+            case.initiate.push(send)
+        })
     }
 
     /// Rewrites `case.json` of an editable case, offering Undo.
@@ -1307,6 +1439,47 @@ mod tests {
             panic!("checks failed to run");
         };
         assert!(results.iter().all(|(_, f)| f.is_empty()), "{results:?}");
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "opens a local workspace listener"]
+    fn sends_and_expected_replies_are_edited_by_hand() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let (mut app, ctx) = open(dir.path())?;
+        let c = app
+            .workspace
+            .cases
+            .iter()
+            .find(|c| c.id == "confirm-orders")
+            .unwrap()
+            .clone();
+        let invoice = dir.path().join("invoice.edi");
+        fs::write(&invoice, "UNH+1+INVOIC:D:96A:UN'BGM+380+INV1+9'UNT+3+1'")?;
+        app.add_send(&c, &invoice)?;
+        let c = app
+            .workspace
+            .cases
+            .iter()
+            .find(|c| c.id == "confirm-orders")
+            .unwrap()
+            .clone();
+        assert_eq!(c.initiate[0].name, "invoice");
+        // The active case's new send works at once.
+        app.command(Command::Initiate("Supplier".into(), "invoice".into()));
+        wait_for(&mut app, "invoice", |a| {
+            a.transfers.values().any(|t| t.kind == "INVOIC")
+        })?;
+        // Expected replies open in Documents to edit by hand.
+        click(&mut app, &ctx, "Cases")?;
+        click(&mut app, &ctx, "ordrsp.edi")?;
+        assert!(app.view == View::Documents);
+        assert_eq!(app.edit_file, Path::new("cases/confirm-orders/ordrsp.edi"));
+        app.edit = app.edit.replace("PO1001", "PO1002");
+        app.save()?;
+        let saved =
+            fs::read_to_string(case::folder(dir.path(), "confirm-orders").join("ordrsp.edi"))?;
+        assert!(saved.contains("PO1002"));
         Ok(())
     }
 
