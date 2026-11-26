@@ -434,7 +434,25 @@ impl Desktop {
                 paths.insert(document.clone());
             }
         }
+        // Every document of the cases you can edit: replies, samples and
+        // expected replies. Imported cases are left out; an import replaces them.
+        for c in self.workspace.cases.iter().filter(|c| c.source.is_none()) {
+            let folder = Path::new(vendredi_core::case::DIRECTORY).join(&c.id);
+            for (file, script) in c.references() {
+                if !script {
+                    paths.insert(folder.join(file));
+                }
+            }
+        }
         paths.into_iter().collect()
+    }
+
+    /// Opens a workspace document in the Documents editor.
+    pub(super) fn open_document(&mut self, path: PathBuf) {
+        self.navigate(View::Documents);
+        if self.view == View::Documents {
+            self.open_file(path);
+        }
     }
     fn navigate(&mut self, view: View) {
         if self.view == view {
@@ -529,18 +547,21 @@ impl Desktop {
             return;
         }
         let dirty = self.edit != self.saved;
-        ui.horizontal_wrapped(|ui| {
+        header_row(ui, |ui| {
             if self.view == View::Documents {
+                // A button of the row's height opens the list of documents.
                 let mut next = self.edit_file.clone();
-                ui.add_enabled_ui(!dirty, |ui| {
-                    egui::ComboBox::from_id_salt("files")
-                        .selected_text(next.display().to_string())
-                        .show_ui(ui, |ui| {
-                            for file in self.files() {
-                                let name = file.display().to_string();
-                                ui.selectable_value(&mut next, file, name);
-                            }
-                        })
+                let label = format!("{}  {}", next.display(), icon::CARET_DOWN);
+                let picker = ui
+                    .add_enabled(!dirty, styled(&label, false, BUTTON))
+                    .on_disabled_hover_text("Save or discard your edits first");
+                egui::Popup::menu(&picker).show(|ui| {
+                    for file in self.files() {
+                        let name = file.display().to_string();
+                        if ui.selectable_label(file == next, name).clicked() {
+                            next = file;
+                        }
+                    }
                 });
                 if next != self.edit_file {
                     self.open_file(next);

@@ -223,6 +223,7 @@ mod tests {
         click(&mut app, &ctx, "Apply shorter retention")?;
         assert_eq!(Workspace::load(dir.path())?.retention_days, 2);
         click(&mut app, &ctx, "Documents")?;
+        app.open_file("cases/confirm-orders/confirmation.edi".into());
         assert!(app.edit.contains('é'));
         app.edit = app.edit.replace("éEPLY", "café");
         click(&mut app, &ctx, "Settings")?;
