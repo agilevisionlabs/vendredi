@@ -794,6 +794,25 @@ mod tests {
 
     #[test]
     #[ignore = "opens a local workspace listener"]
+    fn the_last_page_is_restored() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let (mut app, ctx) = open(dir.path())?;
+        click(&mut app, &ctx, "Cases")?;
+        assert_eq!(app.place(), "cases");
+        click(&mut app, &ctx, "Supplier")?;
+        let place = app.place();
+        assert_eq!(place, "partner Supplier");
+        click(&mut app, &ctx, "All traffic")?;
+        app.restore(Some(&place));
+        assert!(app.view == View::Partner(0));
+        // A page that no longer exists leaves the view alone.
+        app.restore(Some("partner Removed"));
+        assert!(app.view == View::Partner(0));
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "opens a local workspace listener"]
     fn install_starter_cases_from_the_empty_list() -> Result<()> {
         let dir = tempfile::tempdir()?;
         crate::sample(dir.path())?;

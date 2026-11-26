@@ -45,7 +45,13 @@ pub fn run(root: PathBuf) -> Result<()> {
     eframe::run_native(
         "Vendredi",
         opts,
-        Box::new(move |cc| Ok(Box::new(Session::open(root, &cc.egui_ctx)))),
+        Box::new(move |cc| {
+            let mut session = Session::open(root, &cc.egui_ctx);
+            if let (Some(storage), Ok(app)) = (cc.storage, &mut session.desktop) {
+                app.restore(storage.get_string(&place_key(&app.root)).as_deref());
+            }
+            Ok(Box::new(session))
+        }),
     )
     .map_err(|e| anyhow!("{e}"))
 }
@@ -86,6 +92,54 @@ impl Session {
 impl eframe::App for Session {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         self.show(ctx);
+    }
+    /// Remembers the page per workspace. eframe keeps the window size and
+    /// position itself.
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        if let Ok(app) = &self.desktop {
+            storage.set_string(&place_key(&app.root), app.place());
+        }
+    }
+}
+
+fn place_key(root: &Path) -> String {
+    format!("place {}", root.display())
+}
+
+impl Desktop {
+    /// The current page, such as `cases` or `partner Supplier`.
+    fn place(&self) -> String {
+        match &self.view {
+            View::All => "all".into(),
+            View::Attention => "attention".into(),
+            View::Partner(i) => format!("partner {}", self.workspace.partners[*i].name),
+            View::Cases => "cases".into(),
+            View::Scripts => "scripts".into(),
+            View::Documents => "documents".into(),
+            View::Settings | View::Config => "settings".into(),
+        }
+    }
+    /// Returns to a page saved by `place`. Unknown or removed pages are ignored.
+    fn restore(&mut self, place: Option<&str>) {
+        let view = match place {
+            Some("attention") => View::Attention,
+            Some("cases") => View::Cases,
+            Some("scripts") => View::Scripts,
+            Some("documents") => View::Documents,
+            Some("settings") => View::Settings,
+            Some(p) => match p
+                .strip_prefix("partner ")
+                .and_then(|name| self.workspace.partners.iter().position(|q| q.name == name))
+            {
+                Some(i) => {
+                    self.partner = i;
+                    View::Partner(i)
+                }
+                None => return,
+            },
+            None => return,
+        };
+        self.navigate(view);
     }
 }
 
