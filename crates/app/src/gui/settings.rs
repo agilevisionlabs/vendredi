@@ -45,10 +45,20 @@ impl Desktop {
                         confirm: false,
                     });
                 }
-                if button(ui, "Edit configuration file", false).clicked() {
-                    self.navigate(View::Config);
-                }
             });
+            ui.add_space(GAP_L);
+            // The raw file stays available, out of the way of everyday work.
+            egui::CollapsingHeader::new("Advanced")
+                .id_salt("settings advanced")
+                .show(ui, |ui| {
+                    ui.label(muted(
+                        "vendredi.toml holds the listener, identity and partners. The settings above and the partner editor change it for you.",
+                    ));
+                    ui.add_space(GAP_S);
+                    if button(ui, "Edit configuration file", false).clicked() {
+                        self.navigate(View::Config);
+                    }
+                });
         });
     }
 

@@ -1089,7 +1089,13 @@ send = { directory = "freight-out" }
         click(&mut app, &ctx, &with_icon(icon::PLAY, "Resume"))?;
         wait_for(&mut app, "listener restart", |app| app.listening)?;
         click(&mut app, &ctx, "Settings")?;
+        click(&mut app, &ctx, "Advanced")?;
+        // Let the section finish opening before clicking inside it.
+        for _ in 0..30 {
+            frame(&mut app, &ctx, vec![]);
+        }
         click(&mut app, &ctx, "Edit configuration file")?;
+        assert!(app.view == View::Config);
         // Drive the multiline editor with the same keyboard events as Select All and paste.
         // Without an active case the partner only acknowledges.
         let changed = app.edit.replace("case = \"confirm-orders\"\n", "");
