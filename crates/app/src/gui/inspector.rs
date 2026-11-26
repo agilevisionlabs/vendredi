@@ -592,7 +592,14 @@ impl Desktop {
                     ui.painter().galley(pos, galley, col::text());
                     offset += raw.len();
                     let res = match glossary::segment(tag) {
-                        Some(meaning) => res.on_hover_text(format!("{tag}: {meaning}")),
+                        Some(meaning) => {
+                            // What the segment is for, then each value by name.
+                            let mut text = format!("{tag}: {meaning}");
+                            for (name, value) in glossary::named_elements(raw) {
+                                text.push_str(&format!("\n{name}: {value}"));
+                            }
+                            res.on_hover_text(text)
+                        }
                         None => res,
                     };
                     if res.clicked() {

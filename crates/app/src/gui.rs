@@ -639,6 +639,15 @@ impl Desktop {
                                             .unwrap_or("Not a segment Vendredi knows"),
                                     ));
                                 });
+                                // Each value with what it is, under its segment.
+                                for (name, value) in glossary::named_elements(raw) {
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(GAP_XL);
+                                        ui.label(muted(name).size(ty::CAPTION));
+                                        ui.label(egui::RichText::new(value).font(ty::code()));
+                                    });
+                                }
+                                ui.add_space(GAP_XS);
                             }
                         });
                 });
