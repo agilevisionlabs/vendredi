@@ -52,16 +52,14 @@ def sample_exchange(root, port):
 def verify_finder_launch(app, binary, helper, home):
     workspace = home / "Vendredi"
     port = init_workspace(binary, workspace)
-    # Keep the bundled ORDERS exchange and exercise a second, scripted rule
-    # through the same running desktop's HTTP listener.
-    with (workspace / "vendredi.toml").open("a") as config:
-        config.write("""
-[[partners.rules]]
-name = "Scripted invoice reply"
-message = "INVOIC"
-actions = [{ script = "invoice.js", function = "reply" }]
-""")
-    (workspace / "invoice.js").write_text("""function reply(i, api) {
+    # Keep the bundled ORDERS exchange and exercise a second, scripted rule of
+    # the active case through the same running desktop's HTTP listener.
+    case = workspace / "cases/confirm-orders"
+    definition = json.loads((case / "case.json").read_text())
+    definition["rules"].append({"name": "Scripted invoice reply", "message": "INVOIC",
+                                "actions": [{"script": "invoice.js", "function": "reply"}]})
+    (case / "case.json").write_text(json.dumps(definition, indent=2))
+    (case / "invoice.js").write_text("""function reply(i, api) {
         api.set("invoiceCount", (api.get("invoiceCount") || 0) + 1);
         api.send(api.build("ORDRSP", "D96A", [["FTX", "GUI-SCRIPT"]]));
     }""")

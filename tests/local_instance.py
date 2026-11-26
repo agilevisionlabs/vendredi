@@ -4,6 +4,7 @@ import contextlib
 import http.client
 import http.server
 import json
+import tomllib
 import os
 from pathlib import Path
 import queue
@@ -142,6 +143,21 @@ def snapshot(folder):
     return files
 
 
+def write_case(root, standard, message, version, actions):
+    """Writes the workspace's `orders` case with one rule. Actions use the
+    TOML inline form; files they name are copied from the workspace root."""
+    folder = root / "cases/orders"
+    folder.mkdir(parents=True, exist_ok=True)
+    parsed = tomllib.loads(f"actions = [{actions}]")["actions"]
+    for action in parsed:
+        name = action.get("document") or action.get("script")
+        if name and (root / name).exists():
+            shutil.copy(root / name, folder / name)
+    case = {"vendredi_case": 1, "id": "orders", "name": "Orders", "standard": standard,
+            "rules": [{"name": "Orders", "message": message, "version": version, "actions": parsed}]}
+    (folder / "case.json").write_text(json.dumps(case, indent=2))
+
+
 class LocalExchange(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -150,11 +166,16 @@ class LocalExchange(unittest.TestCase):
         self.listener = port()
         self.config = (SAMPLE / "vendredi.toml").read_text().replace(":8180", f":{self.listener}")
         self.order = (SAMPLE / "order.edi").read_bytes()
-        shutil.copy(SAMPLE / "confirmation.edi", self.root)
+        shutil.copy(SAMPLE / "cases/orders/confirmation.edi", self.root)
         self.db = self.root / ".vendredi/vendredi.db"
+        # The rule of the workspace's `orders` case, written on each launch.
+        self.case = ("edifact", "ORDERS", "D96A")
+        self.actions = '{ document = "confirmation.edi" }'
 
     def launch(self):
         (self.root / "vendredi.toml").write_text(self.config)
+        if 'case = "orders"' in self.config:
+            write_case(self.root, *self.case, self.actions)
         app = Instance(self.root)
         self.addCleanup(app.close)
         return app
@@ -212,7 +233,7 @@ class LocalExchange(unittest.TestCase):
 
     def test_transport_and_acknowledgement_faults(self):
         self.config = self.config.replace('url = "http://127.0.0.1:8181/replies"', 'directory = "out"')
-        self.config = self.config.replace('{ document = "confirmation.edi" }', '{ fault = "http500" }, { fault = "reject" }')
+        self.actions = '{ fault = "http500" }, { fault = "reject" }'
         app = self.launch()
         self.assertEqual(self.post(self.order), (500, b""))
         app.wait("delivered")
@@ -229,7 +250,8 @@ class LocalExchange(unittest.TestCase):
         for fault in ["slow_response", "no_response"]:
             with self.subTest(fault=fault):
                 actions = '{ fault = "' + fault + '" }, { fault = "suppress_ack" }, { fault = "malformed" }, { script = "reply.js", function = "reply" }'
-                self.config = base.replace('{ document = "confirmation.edi" }', actions)
+                self.config = base
+                self.actions = actions
                 app = self.launch()
                 if fault == "slow_response":
                     start = time.monotonic()
@@ -246,8 +268,7 @@ class LocalExchange(unittest.TestCase):
 
     def test_script_sandbox_recovery_and_persistence(self):
         self.config = self.config.replace('url = "http://127.0.0.1:8181/replies"', 'directory = "out"')
-        self.config = self.config.replace('{ document = "confirmation.edi" }',
-            '{ fault = "suppress_ack" }, { script = "reply.js", function = "reply" }')
+        self.actions = '{ fault = "suppress_ack" }, { script = "reply.js", function = "reply" }'
         good = """function reply(inbound, api) {
             if (globalThis.previous) throw Error("shared JS global");
             globalThis.previous = true;
@@ -306,8 +327,7 @@ class LocalExchange(unittest.TestCase):
 
     def test_structured_and_legacy_scripts_reply_identically(self):
         base = self.config.replace('url = "http://127.0.0.1:8181/replies"', 'directory = "out"')
-        base = base.replace('{ document = "confirmation.edi" }',
-            '{ fault = "suppress_ack" }, { script = "reply.js", function = "reply" }')
+        self.actions = '{ fault = "suppress_ack" }, { script = "reply.js", function = "reply" }'
         scripts = {
             "legacy": """function reply(inbound, api) {
                 const order = inbound.messages[0].segments[1].elements[1][0];
@@ -340,10 +360,10 @@ class LocalExchange(unittest.TestCase):
     def test_cases_switch_while_listening_and_persist(self):
         subprocess.run([BINARY, "init", self.root], check=True, capture_output=True)
         config = (self.root / "vendredi.toml").read_text()
-        self.assertIn('cases = ["confirm-orders"', config)
+        self.assertIn('case = "confirm-orders"', config)
         self.config = config.replace(":8180", f":{self.listener}")
         listed = subprocess.run([BINARY, "case", "list", self.root], check=True, capture_output=True, text=True).stdout
-        self.assertIn("* default", listed)
+        self.assertIn("* confirm-orders", listed)
         self.assertIn("reject-orders", listed)
         app = self.launch()
         self.assertEqual(self.post(self.order), (202, b""))
@@ -381,8 +401,8 @@ class LocalExchange(unittest.TestCase):
         invoice = app.wait("delivered")["transfer"]
         app.close()
         self.assertIn(b"INVOIC:D:96A:UN", (self.root / "replies" / f"vendredi-{invoice}.edi").read_bytes())
-        subprocess.run([BINARY, "case", "use", self.root, "Supplier", "default"], check=True, capture_output=True)
-        self.assertNotIn("\ncase =", (self.root / "vendredi.toml").read_text())
+        subprocess.run([BINARY, "case", "use", self.root, "Supplier", "confirm-orders"], check=True, capture_output=True)
+        self.assertIn('case = "confirm-orders"', (self.root / "vendredi.toml").read_text())
 
     def test_import_cases_from_folder_and_https(self):
         folder, remote = self.root / "folder", self.root / "remote"
@@ -434,12 +454,11 @@ class LocalExchange(unittest.TestCase):
         self.assertIn("reply 1 (expected.edi) differs at byte 73", result.stdout)
 
     def x12_workspace(self, actions=None, send='directory = "out"'):
-        shutil.copy(X12 / "855.edi", self.root)
+        shutil.copy(X12 / "cases/orders/855.edi", self.root)
         config = (X12 / "vendredi.toml").read_text().replace(":8180", f":{self.listener}")
-        config = config.replace('url = "http://127.0.0.1:8181/replies"', send)
-        if actions:
-            config = config.replace('actions = [{ document = "855.edi" }]', f"actions = [{actions}]")
-        self.config = config
+        self.config = config.replace('url = "http://127.0.0.1:8181/replies"', send)
+        self.case = ("x12", "850", "005010")
+        self.actions = actions or '{ document = "855.edi" }'
         return (X12 / "850-5010.edi").read_bytes()
 
     def x12_replies(self):
@@ -534,7 +553,7 @@ class LocalExchange(unittest.TestCase):
     def test_envelope_faults_and_duplicate_delivery(self):
         self.config = self.config.replace('url = "http://127.0.0.1:8181/replies"', 'directory = "out"')
         actions = '{ fault = "duplicate_reference" }, { fault = "wrong_count" }, { fault = "duplicate" }, { document = "confirmation.edi" }'
-        self.config = self.config.replace('{ document = "confirmation.edi" }', actions)
+        self.actions = actions
         app = self.launch()
         self.assertEqual(self.post(self.order), (202, b""))
         for _ in range(3):
