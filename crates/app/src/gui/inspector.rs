@@ -34,6 +34,57 @@ struct Step {
     link: Option<Link>,
 }
 impl Desktop {
+    /// One sentence on how this transfer relates to the others: what a
+    /// reply answers, or how a received message was answered.
+    pub(super) fn story(&self, row: &TrafficRow) -> Option<String> {
+        let name = |t: &TrafficRow| {
+            let kind = if t.kind.is_empty() {
+                "message"
+            } else {
+                t.kind.as_str()
+            };
+            if t.reference.is_empty() {
+                kind.to_owned()
+            } else {
+                format!("{kind} {}", t.reference)
+            }
+        };
+        let acknowledgement = |kind: &str| matches!(kind, "CONTRL" | "997" | "999" | "TA1");
+        if row.outgoing {
+            let origin = self
+                .transfers
+                .get(&row.root)
+                .filter(|t| t.id != row.id && !t.outgoing)?;
+            let verb = if acknowledgement(&row.kind) {
+                "Acknowledges"
+            } else {
+                "Answers"
+            };
+            return Some(format!(
+                "{verb} {} received at {}",
+                name(origin),
+                time(origin.time)
+            ));
+        }
+        let replies: Vec<_> = self
+            .transfers
+            .values()
+            .filter(|t| t.outgoing && t.root == row.id)
+            .map(|t| {
+                if t.kind.is_empty() {
+                    "a message".to_owned()
+                } else {
+                    t.kind.clone()
+                }
+            })
+            .collect();
+        Some(match replies.as_slice() {
+            [] => "No replies sent".to_owned(),
+            [one] => format!("Answered with {one}"),
+            [rest @ .., last] => format!("Answered with {} and {last}", rest.join(", ")),
+        })
+    }
+
     fn steps(&self, row: &TrafficRow) -> Vec<Step> {
         let events = array(&self.detail, "events");
         let mut steps = Vec::new();
@@ -217,6 +268,9 @@ impl Desktop {
                 } else {
                     "Received from your system"
                 };
+                if let Some(story) = self.story(&row) {
+                    ui.label(RichText::new(story).color(col::secondary_text()));
+                }
                 ui.label(muted(format!(
                     "{source} · {} · {} · {} · {} bytes",
                     row.partner,

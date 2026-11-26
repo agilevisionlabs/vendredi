@@ -1104,6 +1104,18 @@ send = { directory = "freight-out" }
             text_matches_reply(&app.detail)
         })?;
         assert!(app.detail["raw"].as_str().unwrap().contains("ORDRSP"));
+        // The inspector says how the transfers relate.
+        let reply = app.transfers[&app.selected.unwrap()].clone();
+        let story = app.story(&reply).unwrap();
+        assert!(
+            story.starts_with("Answers ORDERS ORDER42 received at"),
+            "{story}"
+        );
+        let order = app.transfers[&reply.root].clone();
+        assert_eq!(
+            app.story(&order).unwrap(),
+            "Answered with CONTRL and ORDRSP"
+        );
         let segment_text = app.detail["segments"][2]["raw"]
             .as_str()
             .unwrap()
