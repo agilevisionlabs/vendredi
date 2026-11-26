@@ -632,6 +632,53 @@ mod tests {
     }
 }
 
+/// The app's mark, drawn from the shapes of the app icon
+/// (`packaging/macos/Vendredi.svg`): a document with a folded corner and a
+/// reply arrow on a cream tile. egui fills only convex shapes, so the
+/// document and the arrow are built from convex pieces.
+pub(super) fn mark(ui: &mut Ui, size: f32) -> Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(size, size), Sense::hover());
+    let p = ui.painter();
+    let unit = size / 64.;
+    // The icon's 64-unit grid, and its artwork's own offset and scale.
+    let at = |x: f32, y: f32| rect.min + vec2((11. + x * 0.875) * unit, (11. + y * 0.875) * unit);
+    let tile = Rect::from_min_size(
+        rect.min + vec2(5. * unit, 5. * unit),
+        vec2(54. * unit, 54. * unit),
+    );
+    let cream = Color32::from_rgb(255, 249, 240);
+    let orange = Color32::from_rgb(255, 121, 81);
+    p.rect(
+        tile,
+        12. * unit,
+        cream,
+        Stroke::new(0.4 * unit, Color32::from_rgb(225, 218, 207)),
+        StrokeKind::Inside,
+    );
+    let radius = (3. * 0.875 * unit) as u8;
+    p.rect_filled(Rect::from_two_pos(at(5., 3.), at(26., 45.)), radius, orange);
+    p.rect_filled(
+        Rect::from_two_pos(at(25., 17.), at(41., 45.)),
+        radius,
+        orange,
+    );
+    let poly = |points: &[(f32, f32)], fill| {
+        p.add(Shape::convex_polygon(
+            points.iter().map(|(x, y)| at(*x, *y)).collect(),
+            fill,
+            Stroke::NONE,
+        ));
+    };
+    // The folded corner.
+    poly(&[(29., 3.5), (41., 14.), (29., 14.)], orange);
+    // The reply arrow, cut out in the tile's colour.
+    poly(&[(18., 23.), (18., 39.), (9., 31.)], cream);
+    poly(&[(18., 28.), (25., 28.), (25., 33.), (18., 33.)], cream);
+    poly(&[(25., 28.), (29., 24.), (34., 24.), (25., 33.)], cream);
+    poly(&[(29., 21.), (34., 21.), (34., 24.), (29., 24.)], cream);
+    response
+}
+
 /// A page or list with nothing in it yet: what it is for and the next step.
 pub(super) fn empty_state(ui: &mut Ui, title: &str, text: &str, actions: impl FnOnce(&mut Ui)) {
     ui.add_space(GAP_XL);

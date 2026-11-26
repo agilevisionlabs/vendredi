@@ -510,7 +510,8 @@ impl Desktop {
             .map(|p| format!("~/{}", p.display()))
             .unwrap_or_else(|| path.clone());
         ui.horizontal(|ui| {
-            ui.add_space(GAP_S);
+            ui.add_space(GAP_XS);
+            mark(ui, 36.);
             ui.vertical(|ui| {
                 ui.label(RichText::new("Vendredi").font(ty::section()));
                 ui.add(Label::new(muted(short).monospace().size(ty::CAPTION)).truncate())

@@ -258,6 +258,8 @@ impl Session {
                     ui.add_space(left);
                     ui.vertical(|ui| {
                         ui.set_width(width);
+                        mark(ui, 72.);
+                        ui.add_space(GAP_S);
                         ui.label(RichText::new("Welcome to Vendredi").font(ty::display()));
                         ui.add_space(GAP_XS);
                         ui.label(
