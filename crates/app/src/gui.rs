@@ -558,14 +558,49 @@ impl Desktop {
         if self.file_unavailable {
             return;
         }
-        egui::ScrollArea::both().show(ui, |ui| {
-            ui.add(
-                egui::TextEdit::multiline(&mut self.edit)
-                    .id(egui::Id::new("workspace-file-content"))
-                    .code_editor()
-                    .desired_rows(32)
-                    .desired_width(f32::INFINITY),
-            );
+        // Documents get a guide to their segments beside the text.
+        let guide = self.view == View::Documents && ui.available_width() > 760.;
+        let width = ui.available_width();
+        ui.horizontal_top(|ui| {
+            let editor = if guide { width * 0.6 } else { width };
+            ui.vertical(|ui| {
+                ui.set_width(editor);
+                egui::ScrollArea::both()
+                    .id_salt("file editor")
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::multiline(&mut self.edit)
+                                .id(egui::Id::new("workspace-file-content"))
+                                .code_editor()
+                                .desired_rows(32)
+                                .desired_width(f32::INFINITY),
+                        );
+                    });
+            });
+            if guide {
+                ui.add_space(GAP_L);
+                ui.vertical(|ui| {
+                    form::label(ui, "Segments");
+                    egui::ScrollArea::vertical()
+                        .id_salt("segment guide")
+                        .show(ui, |ui| {
+                            for (tag, raw) in glossary::segments(&self.edit) {
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(tag)
+                                            .font(ty::code_strong())
+                                            .color(col::blue()),
+                                    )
+                                    .on_hover_text(raw);
+                                    ui.label(muted(
+                                        glossary::segment(tag)
+                                            .unwrap_or("Not a segment Vendredi knows"),
+                                    ));
+                                });
+                            }
+                        });
+                });
+            }
         });
     }
 }

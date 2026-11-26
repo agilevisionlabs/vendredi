@@ -54,6 +54,32 @@ pub(super) fn segment(tag: &str) -> Option<&'static str> {
     })
 }
 
+/// The tag and text of each segment in an EDIFACT or X12 document, split at
+/// segment terminators that are not escaped.
+pub(super) fn segments(text: &str) -> Vec<(&str, &str)> {
+    let x12 = text.trim_start().starts_with("ISA") || text.trim_start().starts_with("ST*");
+    let (terminator, element) = if x12 { ('~', '*') } else { ('\'', '+') };
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut escaped = false;
+    for (i, c) in text.char_indices() {
+        if !x12 && c == '?' && !escaped {
+            escaped = true;
+            continue;
+        }
+        if c == terminator && !escaped {
+            let raw = text[start..=i].trim();
+            if !raw.is_empty() {
+                let tag = raw.split([element, terminator]).next().unwrap_or_default();
+                out.push((tag, raw));
+            }
+            start = i + c.len_utf8();
+        }
+        escaped = false;
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -62,5 +88,16 @@ mod tests {
             assert!(super::segment(tag).is_some(), "{tag}");
         }
         assert!(super::segment("ZZZ").is_none());
+        let edifact = super::segments("UNH+1+ORDRSP:D:96A:UN'\nFTX+AAI+++a?'b'UNT+3+1'");
+        assert_eq!(
+            edifact.iter().map(|(t, _)| *t).collect::<Vec<_>>(),
+            ["UNH", "FTX", "UNT"]
+        );
+        assert_eq!(edifact[1].1, "FTX+AAI+++a?'b'");
+        let x12 = super::segments("ST*855*0001~BAK*00*AC*PO1~SE*3*0001~");
+        assert_eq!(
+            x12.iter().map(|(t, _)| *t).collect::<Vec<_>>(),
+            ["ST", "BAK", "SE"]
+        );
     }
 }

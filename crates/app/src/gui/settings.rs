@@ -48,6 +48,8 @@ impl Desktop {
             });
             ui.add_space(GAP_L);
             // The raw file stays available, out of the way of everyday work.
+            // Disclosure headers share the small control height.
+            ui.spacing_mut().interact_size.y = SMALL_BUTTON;
             egui::CollapsingHeader::new("Advanced")
                 .id_salt("settings advanced")
                 .show(ui, |ui| {
