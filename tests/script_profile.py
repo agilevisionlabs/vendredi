@@ -18,12 +18,13 @@ def measure(binary):
         (root / "vendredi.toml").write_text(
             (local.SAMPLE / "vendredi.toml").read_text()
             .replace(":8180", ":0")
-            .replace('url = "http://127.0.0.1:8181/replies"', 'directory = "out"')
-            .replace('{ document = "confirmation.edi" }', '{ script = "reply.js", function = "reply" }'))
+            .replace('url = "http://127.0.0.1:8181/replies"', 'directory = "out"'))
         (root / "reply.js").write_text("""function reply(i,a) {
             a.set("runs", (a.get("runs") || 0) + 1);
             a.send(a.build("ORDRSP", "D96A", [["BGM", "231"]]));
         }""")
+        # The partner's rule lives in its active case, `orders`.
+        local.write_case(root, "edifact", "ORDERS", "D96A", '{ script = "reply.js", function = "reply" }')
         start = time.perf_counter()
         app = local.Instance(root)
         ready = time.perf_counter() - start
