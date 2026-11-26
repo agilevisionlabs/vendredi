@@ -23,6 +23,9 @@ pub struct Workspace {
     /// Every case installed under `cases/`, loaded and validated.
     #[serde(skip)]
     pub cases: Vec<Case>,
+    /// Problems the workspace loads despite, such as settings it ignores.
+    #[serde(skip)]
+    pub warnings: Vec<String>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -48,7 +51,7 @@ pub struct Partner {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub x12: Option<X12>,
     /// Rules used to live here. They now belong to cases, so a workspace
-    /// that still has them gets an explanation instead of a parse error.
+    /// that still has them loads with a warning and the rules are ignored.
     #[serde(default, rename = "rules", skip_serializing)]
     pub legacy_rules: Option<toml::Value>,
     /// The active case, whose rules answer this partner. Without one the
@@ -357,6 +360,13 @@ impl Workspace {
                 .with_context(|| path.display().to_string())?;
         w.root = dir.canonicalize()?;
         for p in &mut w.partners {
+            if p.legacy_rules.take().is_some() {
+                w.warnings.push(format!(
+                    "Partner {} still has rules in vendredi.toml. Vendredi ignores them: rules now live in cases. \
+                     Create or duplicate a case with those rules and make it active, then remove the rules from vendredi.toml.",
+                    p.name
+                ));
+            }
             if let Some(e) = &p.edifact {
                 if let Some(charset) = &e.charset {
                     p.charset = charset.clone();
@@ -397,13 +407,6 @@ impl Workspace {
             ensure!(
                 !p.identity.is_empty() && !p.identity[0].is_empty(),
                 "partner identity required"
-            );
-            ensure!(
-                p.legacy_rules.is_none(),
-                "partner {}: rules now live in cases. Move them into {}/<id>/{} and set case = \"<id>\"",
-                p.name,
-                case::DIRECTORY,
-                case::FILE
             );
             match p.standard {
                 Standard::Edifact => {
@@ -564,7 +567,7 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn partner_rules_point_to_cases() -> Result<()> {
+    fn partner_rules_are_ignored_with_a_warning() -> Result<()> {
         let dir = tempfile::tempdir()?;
         orders_example(dir.path())?;
         let path = dir.path().join("vendredi.toml");
@@ -573,8 +576,15 @@ mod tests {
             "\n[[partners.rules]]\nname = \"Old\"\nmessage = \"ORDERS\"\nactions = []\n",
         );
         fs::write(&path, text)?;
-        let err = format!("{:#}", Workspace::load(dir.path()).unwrap_err());
-        assert!(err.contains("rules now live in cases"), "{err}");
+        let w = Workspace::load(dir.path())?;
+        assert_eq!(w.warnings.len(), 1);
+        assert!(
+            w.warnings[0].contains("Supplier still has rules"),
+            "{:?}",
+            w.warnings
+        );
+        assert_eq!(w.partners[0].case_id(), None);
+        assert!(w.partners[0].scenario().is_empty());
         Ok(())
     }
     #[test]

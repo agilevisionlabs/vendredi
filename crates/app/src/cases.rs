@@ -10,6 +10,9 @@ use vendredi_core::{
 /// Prints each installed case and the partners it answers.
 pub fn list(dir: &Path) -> Result<()> {
     let w = Workspace::load(dir)?;
+    for warning in &w.warnings {
+        eprintln!("warning: {warning}");
+    }
     for c in &w.cases {
         let partners: Vec<_> = w
             .partners

@@ -105,6 +105,9 @@ pub fn start(w: Workspace, out: Output, with_history: bool, listen: bool) -> Res
                 out(v);
             }
         }
+        for text in &e.workspace.warnings {
+            out(json!({"event":"warning","text":text}));
+        }
         out(json!({"event":"ready","listen":listeners.as_ref().map(|l| l.address().to_string())}));
         ready
             .send(Ok(()))

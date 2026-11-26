@@ -281,7 +281,8 @@ impl Desktop {
                 "detail" if v["value"]["transfer"].as_i64() == self.selected => {
                     self.detail = v["value"].clone()
                 }
-                "detail" => {}
+                // The workspace already lists its warnings.
+                "detail" | "warning" => {}
                 "ready" | "listening" => {
                     self.listening = v["listen"].is_string();
                     if let Some(addr) = v["listen"].as_str().and_then(|s| s.parse().ok()) {

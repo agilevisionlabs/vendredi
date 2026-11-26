@@ -742,6 +742,27 @@ mod tests {
 
     #[test]
     #[ignore = "opens a local workspace listener"]
+    fn old_partner_rules_open_with_a_warning() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        crate::sample(dir.path())?;
+        let file = dir.path().join("vendredi.toml");
+        let config = fs::read_to_string(&file)?.replace(":8180", ":0").replace(
+            "case = \"confirm-orders\"\n",
+            "\n[[partners.rules]]\nname = \"Old\"\nmessage = \"ORDERS\"\nactions = []\n",
+        );
+        fs::write(&file, config)?;
+        let ctx = egui::Context::default();
+        let mut app = Desktop::open(dir.path().into(), &ctx)?;
+        assert_eq!(app.workspace.warnings.len(), 1);
+        click(&mut app, &ctx, "Cases")?;
+        // The warning stays above every page.
+        let warning = app.workspace.warnings[0].clone();
+        click(&mut app, &ctx, &warning)?;
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "opens a local workspace listener"]
     fn install_starter_cases_from_the_empty_list() -> Result<()> {
         let dir = tempfile::tempdir()?;
         crate::sample(dir.path())?;
