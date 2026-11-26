@@ -556,6 +556,11 @@ impl Desktop {
                     "Not receiving: HTTP and folders are off until you resume".to_owned(),
                 )
             };
+            let pending = self
+                .transfers
+                .values()
+                .filter(|t| t.outgoing && t.status == "Pending")
+                .count();
             // The dot pulses briefly when a message arrives.
             let now = ui.input(|i| i.time);
             let latest = self
@@ -587,6 +592,14 @@ impl Desktop {
                             .size(ty::CAPTION)
                             .color(col::secondary_text()),
                     );
+                    // Replies still on their way, so a slow channel is visible.
+                    if pending > 0 {
+                        ui.label(
+                            RichText::new(format!("· {pending} sending"))
+                                .size(ty::CAPTION)
+                                .color(col::secondary_text()),
+                        );
+                    }
                 })
                 .response
                 .on_hover_text(detail);
