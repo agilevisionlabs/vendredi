@@ -58,7 +58,9 @@ fn sample(root: &Path) -> Result<()> {
     std::fs::create_dir_all(root)?;
     install_starter_cases(root)?;
     // The sample partner starts with the starter case that confirms orders.
+    // A Windows checkout may embed CRLF; workspaces get one line ending.
     let config = CONFIG
+        .replace("\r\n", "\n")
         .replace(
             "url = \"http://127.0.0.1:8181/replies\" }",
             "directory = \"replies\" }",

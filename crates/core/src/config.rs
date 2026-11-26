@@ -528,11 +528,10 @@ pub(crate) fn orders_example(dir: &Path) -> Result<()> {
     let case = dir.join(case::DIRECTORY).join("orders");
     fs::create_dir_all(&case)?;
     let confirmation = include_bytes!("../../../examples/orders/cases/orders/confirmation.edi");
+    // Git may check text out with CRLF on Windows; tests edit lines ending in \n.
+    let config = include_str!("../../../examples/orders/vendredi.toml").replace("\r\n", "\n");
     for (path, bytes) in [
-        (
-            dir.join("vendredi.toml"),
-            include_bytes!("../../../examples/orders/vendredi.toml").as_slice(),
-        ),
+        (dir.join("vendredi.toml"), config.as_bytes()),
         (
             case.join(case::FILE),
             include_bytes!("../../../examples/orders/cases/orders/case.json"),
@@ -591,7 +590,7 @@ mod tests {
     fn edifact_settings_read_from_either_place() -> Result<()> {
         let dir = tempfile::tempdir()?;
         orders_example(dir.path())?;
-        let base = include_str!("../../../examples/orders/vendredi.toml");
+        let base = &include_str!("../../../examples/orders/vendredi.toml").replace("\r\n", "\n");
         fs::write(
             dir.path().join("vendredi.toml"),
             base.replace(
