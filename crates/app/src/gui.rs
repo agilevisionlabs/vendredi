@@ -12,6 +12,7 @@ mod rules;
 mod scripts;
 mod search;
 mod send;
+mod session;
 mod settings;
 mod shortcuts;
 mod theme;
@@ -36,7 +37,7 @@ use vendredi_core::{
     engine::{Delivery, TrafficRow},
 };
 
-pub fn run(root: PathBuf) -> Result<()> {
+pub fn run(root: Option<PathBuf>) -> Result<()> {
     let viewport = egui::ViewportBuilder::default()
         .with_inner_size([1440.0, 860.0])
         .with_min_inner_size([680.0, 420.0]);
@@ -51,105 +52,24 @@ pub fn run(root: PathBuf) -> Result<()> {
         "Vendredi",
         opts,
         Box::new(move |cc| {
-            let mut session = Session::open(root, &cc.egui_ctx);
+            let recent = cc
+                .storage
+                .and_then(|s| s.get_string(session::RECENT))
+                .map(|r| session::parse_recent(&r))
+                .unwrap_or_default();
+            let mut session = session::Session::start(root, recent, &cc.egui_ctx);
             // AppKit menus belong to the main thread, where eframe calls this.
             #[cfg(target_os = "macos")]
             {
                 session._menu = menu::install(&cc.egui_ctx).ok();
             }
-            if let (Some(storage), Ok(app)) = (cc.storage, &mut session.desktop) {
+            if let (Some(storage), Some(Ok(app))) = (cc.storage, &mut session.desktop) {
                 app.restore(storage.get_string(&place_key(&app.root)).as_deref());
             }
             Ok(Box::new(session))
         }),
     )
     .map_err(|e| anyhow!("{e}"))
-}
-
-struct Session {
-    root: PathBuf,
-    desktop: Result<Desktop>,
-    /// Kept alive for as long as the menu bar shows it.
-    #[cfg(target_os = "macos")]
-    _menu: Option<muda::Menu>,
-}
-impl Session {
-    fn open(root: PathBuf, ctx: &egui::Context) -> Self {
-        let desktop = Desktop::open(root.clone(), ctx);
-        Self {
-            root,
-            desktop,
-            #[cfg(target_os = "macos")]
-            _menu: None,
-        }
-    }
-    fn show(&mut self, ctx: &egui::Context) {
-        match &mut self.desktop {
-            Ok(app) => app.show(ctx),
-            Err(e) => {
-                let mut retry = false;
-                let explained = explain::explain(e);
-                egui::CentralPanel::default()
-                    .frame(egui::Frame::new().fill(BG).inner_margin(GAP_XL as i8 * 2))
-                    .show(ctx, |ui| {
-                        ui.set_max_width(640.);
-                        ui.label(
-                            egui::RichText::new("Couldn’t open the workspace").font(bold(22.)),
-                        );
-                        ui.add_space(GAP_S);
-                        ui.label(egui::RichText::new(&explained.text).size(15.));
-                        ui.add_space(GAP_XS);
-                        ui.label(muted(self.root.display().to_string()).monospace());
-                        ui.add_space(GAP_L);
-                        ui.horizontal(|ui| {
-                            retry = button(ui, "Try again", true).clicked();
-                            if button(ui, "Show in Finder", false).clicked() {
-                                shortcuts::open_externally(
-                                    &self.root.join("vendredi.toml").display().to_string(),
-                                    true,
-                                );
-                            }
-                            if button(ui, "Open the guide", false).clicked() {
-                                shortcuts::open_externally(shortcuts::GUIDE, false);
-                            }
-                        });
-                        ui.add_space(GAP_L);
-                        egui::CollapsingHeader::new("Details")
-                            .id_salt("open error details")
-                            .show(ui, |ui| {
-                                egui::ScrollArea::vertical()
-                                    .max_height(240.)
-                                    .show(ui, |ui| {
-                                        ui.label(
-                                            egui::RichText::new(&explained.details).monospace(),
-                                        );
-                                    });
-                            });
-                    });
-                if retry {
-                    self.desktop = Desktop::open(self.root.clone(), ctx);
-                }
-            }
-        }
-    }
-}
-impl eframe::App for Session {
-    fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
-        #[cfg(target_os = "macos")]
-        if let Ok(app) = &mut self.desktop {
-            for action in menu::pending() {
-                app.perform(action);
-            }
-        }
-        self.show(ctx);
-    }
-    /// Remembers the page per workspace. eframe keeps the window size and
-    /// position itself.
-    fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        if let Ok(app) = &self.desktop {
-            storage.set_string(&place_key(&app.root), app.place());
-        }
-    }
 }
 
 fn place_key(root: &Path) -> String {
@@ -262,6 +182,8 @@ struct Desktop {
     toast_count: u64,
     /// When each transfer first appeared, in `egui` time, for the arrival glow.
     arrivals: BTreeMap<i64, f64>,
+    /// A workspace change the session carries out after this frame.
+    pub(super) switch: Option<session::Switch>,
     send_file: String,
     function: String,
     config_source: String,
@@ -339,6 +261,7 @@ impl Desktop {
             toast_list: Vec::new(),
             toast_count: 0,
             arrivals: BTreeMap::new(),
+            switch: None,
             send_file: String::new(),
             function: String::new(),
             edit_file,
@@ -747,13 +670,42 @@ mod tests {
         let valid = fs::read_to_string(&path)?.replace(":8180", ":0");
         fs::write(&path, "[broken")?;
         let ctx = egui::Context::default();
-        let mut session = Session::open(dir.path().into(), &ctx);
-        assert!(session.desktop.is_err());
+        let mut session = session::Session::start(Some(dir.path().into()), vec![], &ctx);
+        assert!(matches!(session.desktop, Some(Err(_))));
         click_in(&ctx, "Try again", |ctx| session.show(ctx))?;
-        assert!(session.desktop.is_err());
+        assert!(matches!(session.desktop, Some(Err(_))));
+        // A workspace that failed to open is not remembered as recent.
+        assert!(session.recent.is_empty());
         fs::write(path, valid)?;
         click_in(&ctx, "Try again", |ctx| session.show(ctx))?;
-        assert!(session.desktop?.listening);
+        assert!(session.desktop.context("desktop")??.listening);
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "opens local workspace listeners"]
+    fn welcome_creates_opens_and_switches_workspaces() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let ctx = egui::Context::default();
+        let first = dir.path().join("first");
+        crate::sample(&first)?;
+        let config = first.join("vendredi.toml");
+        fs::write(&config, fs::read_to_string(&config)?.replace(":8180", ":0"))?;
+        // The most recent workspace that still exists opens on launch.
+        let gone = dir.path().join("gone");
+        let mut session = session::Session::start(None, vec![gone, first.clone()], &ctx);
+        assert_eq!(session.root.as_deref(), Some(first.as_path()));
+        assert!(matches!(session.desktop, Some(Ok(_))));
+        let second = dir.path().join("second");
+        crate::sample(&second)?;
+        let config = second.join("vendredi.toml");
+        fs::write(&config, fs::read_to_string(&config)?.replace(":8180", ":0"))?;
+        // Switching stops the first engine, so its workspace can open again.
+        session.open(second.clone(), &ctx);
+        assert_eq!(session.recent, [second.clone(), first.clone()]);
+        session.open(first.clone(), &ctx);
+        assert!(matches!(session.desktop, Some(Ok(_))));
+        assert_eq!(session.recent, [first, second]);
         Ok(())
     }
 

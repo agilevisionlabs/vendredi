@@ -30,6 +30,9 @@ pub(super) enum Do {
     Import,
     Reveal,
     Guide,
+    OpenWorkspace,
+    NewWorkspace,
+    CloseWorkspace,
 }
 
 /// The handbook the Help menu and empty states link to.
@@ -113,6 +116,8 @@ impl Desktop {
                 open_externally(&self.root.join("vendredi.toml").display().to_string(), true)
             }
             Do::Guide => open_externally(GUIDE, false),
+            // The session switches workspaces; it handles these first.
+            Do::OpenWorkspace | Do::NewWorkspace | Do::CloseWorkspace => {}
         }
     }
 

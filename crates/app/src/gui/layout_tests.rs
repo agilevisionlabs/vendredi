@@ -113,3 +113,25 @@ fn every_page_lines_up_at_every_size() -> Result<()> {
     assert!(report.is_empty(), "{}", report.join("\n"));
     Ok(())
 }
+
+#[test]
+fn the_welcome_screen_lines_up() {
+    let ctx = egui::Context::default();
+    ctx.enable_accesskit();
+    install(&ctx);
+    let mut session = super::session::Session::blank();
+    for size in [egui::vec2(680., 420.), egui::vec2(1440., 900.)] {
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new("test screen size"), size));
+        let output = render(&ctx, vec![], |ctx| session.show(ctx));
+        let names: Vec<_> = controls(&output).into_iter().map(|(n, _)| n).collect();
+        for choice in ["Try the demo", "Create a workspace…", "Open a workspace…"] {
+            assert!(names.iter().any(|n| n == choice), "{names:?}");
+        }
+        let problems: Vec<_> = problems(&output, Rect::from_min_size(egui::Pos2::ZERO, size))
+            .into_iter()
+            // The choice cards are taller than buttons by design.
+            .filter(|p| !p.contains(" is "))
+            .collect();
+        assert!(problems.is_empty(), "{problems:?}");
+    }
+}

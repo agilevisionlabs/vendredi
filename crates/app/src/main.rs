@@ -2,11 +2,11 @@ mod cases;
 mod gui;
 mod runtime;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use runtime::Command;
 use std::{
     io::{self, BufRead},
-    path::{Path, PathBuf},
+    path::Path,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -101,18 +101,9 @@ fn command(args: &[String]) -> Result<Command> {
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.as_slice() {
-        [] => {
-            let root = std::env::var_os("HOME")
-                .or_else(|| std::env::var_os("USERPROFILE"))
-                .map(PathBuf::from)
-                .context("missing home directory")?
-                .join("Vendredi");
-            if !root.join("vendredi.toml").exists() {
-                sample(&root)?;
-            }
-            gui::run(root)
-        }
-        [cmd, dir] if cmd == "gui" => gui::run(dir.into()),
+        // Without a workspace the desktop reopens the last one, or welcomes.
+        [] => gui::run(None),
+        [cmd, dir] if cmd == "gui" => gui::run(Some(dir.into())),
         [cmd, dir] if cmd == "init" => sample(Path::new(dir)),
         [cmd, opt, dir] if cmd == "run" && opt == "--headless" => {
             let w = Workspace::load(Path::new(dir))?;
