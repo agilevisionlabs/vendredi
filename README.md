@@ -26,10 +26,10 @@ The listener returns HTTP 202 after recording the inbound bytes. Replies use the
 ## Workspaces and commands
 
 - Choose **+ Add partner**, or select a partner and choose **Edit partner**. Set its EDIFACT identity, acknowledgement policy, intake channels, and reply destination. **Save partner** updates `vendredi.toml` and reloads the workspace. The sample Supplier watches `inbox` inside the workspace for `.edi` files.
-- Open **Scripts → Add script** to choose a partner and an existing or new rule. Enter a JavaScript filename and function, edit the source, and choose **Save script**. Click a script in the list to edit it or detach it from its rule. Detaching keeps the source file.
-- Open **Rules** to edit a rule’s message match, priority, and ordered actions. Clicking a matched rule in the traffic timeline opens the same editor.
+- Open **Cases** to choose the case that answers a partner and to edit its rules: their message match, order, and actions. Clicking a matched rule in the traffic timeline opens the same editor.
+- Open **Scripts → Add script** to choose a case and one of its rules, or a new rule. Enter a JavaScript filename inside the case folder and a function, edit the source, and choose **Save script**. Click a script in the list to edit it or detach it from its rule. Detaching keeps the source file.
 - **Settings → Edit settings** controls the listener address, workspace identity, and traffic retention. **Edit configuration file** opens the full TOML.
-- Each partner has ordered rules, one or more receive channels and one send channel. The first matching rule runs. Vendredi supports UN/EDIFACT syntax version 3, independent of the message directory release, and ANSI X12 interchanges (see [X12 partners](#x12-partners)).
+- Each partner has one or more receive channels, one send channel and an active case whose ordered rules answer its messages. The first matching rule runs. A partner without an active case only acknowledges what it receives. Vendredi supports UN/EDIFACT syntax version 3, independent of the message directory release, and ANSI X12 interchanges (see [X12 partners](#x12-partners)).
 - To submit a file through a folder channel, write it under a temporary name in the same directory, close it, and rename it to the configured suffix (e.g. `.edi`). The suffix signals that the file is complete. Vendredi claims and removes it after recording. Each outgoing file is published under its transfer ID.
 - Choose **Traffic → Clear history…** to permanently remove exchanges from the last minute, hour, day, or week. Select all partners or a single partner, including one already removed. The last transfer determines the age of each exchange. Cleanup skips pending deliveries and scheduled actions and preserves partner state and reference counters.
 - A running headless instance accepts `send Supplier confirmation.edi`, `send Supplier script.js functionName`, `inspect 1`, `resend 2`, `case Supplier reject-orders`, `sample Supplier Order`, `initiate Supplier Invoice` and `quit` on standard input. Use a JSON array of strings for arguments containing spaces. With the workspace closed, run `vendredi send ./demo Supplier confirmation.edi`, `vendredi inspect ./demo 1` or `vendredi resend ./demo 2`. One engine owns the workspace at a time.
@@ -65,16 +65,16 @@ Rules match `message`, the message type or X12 transaction set, and an optional 
 
 A case is a reusable partner scenario: rules and actions, the documents and scripts they use, sample inbound messages, partner-initiated sends and the replies it should produce. A case never contains identities or channels. The partner supplies them, so one case works with any partner of the same EDI standard. A shared repository of cases can describe typical behavior, such as a partner that confirms, rejects, answers slowly or sends malformed replies.
 
-`vendredi init` installs the starter cases from [`examples/cases`](examples/cases) and attaches them to the sample partner. The partner's own rules remain active as its `default` case.
+Rules live only in cases. Each partner names its active case in `vendredi.toml`, as `case = "reject-orders"`, and the case's folder under `cases/` holds its rules, documents and scripts. Any installed case of the partner's standard can be made active. `vendredi init` installs the starter cases from [`examples/cases`](examples/cases) and makes `confirm-orders` active for the sample partner.
 
 ```sh
 vendredi case list ./demo
 vendredi case use ./demo Supplier reject-orders
 vendredi sample ./demo Supplier Order
-vendredi case use ./demo Supplier default
+vendredi case use ./demo Supplier confirm-orders
 ```
 
-In the desktop, open **Cases** to read a case, choose **Make active**, send its samples or run its partner-initiated sends. Each switch records a `case_switched` event, and the traffic timeline names the case that answered each message. The active case is saved as `case = "reject-orders"` on the partner in `vendredi.toml`, next to the attached `cases` list.
+In the desktop, open **Cases** to read a case, choose **Make active**, send its samples or run its partner-initiated sends. **New case** starts an empty case, and **Duplicate** copies a case with its files. Cases you create, duplicate or install with `init` are yours to edit. An imported case is read-only, because importing it again replaces it: duplicate it to change it. A case that is active for a partner cannot be deleted. Each switch records a `case_switched` event, and the traffic timeline names the case that answered each message.
 
 ### Case format
 
@@ -96,7 +96,7 @@ A case is a folder under `cases/` with a `case.json` and the files it references
 }
 ```
 
-Rules and actions use the same fields as `vendredi.toml`. Conditions belong in JavaScript, and the format has no expression language. `acknowledge` optionally overrides the partner's policy. Documents, samples and expected replies are single `UNH`…`UNT` messages, or `ST`…`SE` transaction sets for X12, with the default separators. The engine wraps a sample in an interchange from the workspace identity to the partner. `initiate` lists named action lists that the partner starts on its own, such as sending an invoice. File paths must stay inside the case.
+Each rule has a `name`, a `message`, an optional `version` and ordered `actions`: a `document`, a `script` with its `function`, a `delay_ms` or a `fault`. Conditions belong in JavaScript, and the format has no expression language. `acknowledge` optionally overrides the partner's policy. Documents, samples and expected replies are single `UNH`…`UNT` messages, or `ST`…`SE` transaction sets for X12, with the default separators. The engine wraps a sample in an interchange from the workspace identity to the partner. `initiate` lists named action lists that the partner starts on its own, such as sending an invoice. File paths must stay inside the case.
 
 A catalog lists cases by relative path, as folders or single JSON files:
 
@@ -130,12 +130,10 @@ receive = [{ path = "/supplier/850" }]
 send = { directory = "replies" }
 x12 = { version = "005010", acknowledgement = "997", ta1 = false, usage = "T" }
 
-[[partners.rules]]
-name = "Confirm purchase orders"
-message = "850"
-version = "005010"
-actions = [{ document = "855.edi" }]
+case = "orders"
 ```
+
+The `orders` case in [`examples/x12/cases/orders`](examples/x12/cases/orders) confirms each 850 with the 855 next to its `case.json`.
 
 - `x12.version` is the `GS08` value for documents and replies, and `ISA12` follows from it. `acknowledgement` is `997` or `999`, sent once per functional group. `ta1 = true` also sends a `TA1`. `usage` sets `ISA15`. `application` and `workspace_application` set the `GS02`/`GS03` codes, which default to the identities. `delimiters` sets the element, repetition, component and segment characters, such as `*^:~`. Use `U` for no repetition separator before version 00402.
 - Delimiters are read from each inbound `ISA`. Vendredi reports wrong `ISA` widths, `SE`, `GE` and `IEA` counts and mismatched control numbers with their byte offsets. A count or control problem inside one transaction set rejects only that set in the group acknowledgement, and the other sets still reach the rules. Envelope problems and the `reject` fault reject the interchange.
