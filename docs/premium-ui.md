@@ -131,6 +131,9 @@ Checked since:
 - The macOS menu bar in the running app. `VENDREDI_MENU_DUMP=1 vendredi gui <workspace>` prints the menu the app installed, with its shortcuts, and quits. All five menus and their items are there. The check found About, Hide and Quit named after the lowercase executable, which is fixed.
 - The platform-specific code, by reading it: Windows and Linux "Show in Finder" was wrong (Explorer's `/select,` must be one argument, and `xdg-open` cannot reveal a file); both are fixed.
 
+- Linux, in an Ubuntu 24.04 container on Apple silicon, as CI's `linux-arm64` job: core tests, the desktop and listener tests, the build and the 13 end-to-end tests all pass.
+- Windows, by cross-compiling for `x86_64-pc-windows-gnu` with MinGW in the same container: it builds without warnings. That check found that New partner and Import cases had no shortcut outside the macOS menu; ⇧⌘N and ⌘I now work in the window on every platform.
+
 Not checked:
 
-- Compiling and running on Windows and Linux. Cross-checking from macOS stops at the `ring` dependency, which needs a C toolchain for those systems that is not installed here. CI builds and tests both on every push (`.github/workflows/verify.yml`), so the first push of this branch is that check.
+- Running on Windows. Only CI's `windows-x64` job (MSVC, with a software OpenGL driver) runs it, on the first push of this branch.
