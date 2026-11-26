@@ -115,7 +115,7 @@ impl Session {
             Ok(()) => {
                 self.open(dir, ctx);
                 if let Some(Ok(app)) = &mut self.desktop {
-                    app.open_partner(Some(0));
+                    app.open_partner_setup(Some(0));
                 }
             }
             Err(e) => self.error = format!("Setting up {}: {e:#}", dir.display()),

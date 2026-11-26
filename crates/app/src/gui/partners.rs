@@ -12,7 +12,12 @@ pub(super) struct PartnerForm {
     error: String,
     alternate_reply: Option<SendChannel>,
     focus_name: bool,
+    /// The step of the guided setup, or `None` for the full editor.
+    step: Option<usize>,
 }
+
+/// The guided setup's steps.
+const STEPS: [&str; 3] = ["Who it is", "How it connects", "How it behaves"];
 impl PartnerForm {
     fn new(workspace: &Workspace, index: Option<usize>) -> Self {
         let n = workspace.partners.len() + 1;
@@ -49,6 +54,17 @@ impl PartnerForm {
             error: String::new(),
             alternate_reply: None,
             focus_name: index.is_none(),
+            step: None,
+        }
+    }
+
+    /// What keeps the current step from going on, if anything.
+    fn step_problem(&self) -> Option<&'static str> {
+        let p = &self.partner;
+        match self.step {
+            Some(0) if p.name.trim().is_empty() => Some("Enter the partner's name."),
+            Some(0) if p.identity[0].trim().is_empty() => Some("Enter the partner's identifier."),
+            _ => None,
         }
     }
 
@@ -156,7 +172,13 @@ impl PartnerForm {
         }
         Ok(doc.to_string())
     }
-    fn fields(&mut self, ui: &mut Ui, workspace: &Workspace) {
+    /// The full editor: every section at once.
+    fn fields(&mut self, ui: &mut Ui, workspace: &Workspace, address: std::net::SocketAddr) {
+        self.who(ui, workspace);
+        self.connects(ui, workspace, address);
+    }
+
+    fn who(&mut self, ui: &mut Ui, workspace: &Workspace) {
         let p = &mut self.partner;
         ui.columns(2, |cols| {
             let name = form::input(
@@ -274,6 +296,10 @@ impl PartnerForm {
                 field(ui, "Six service characters", s);
             }
         });
+    }
+
+    fn connects(&mut self, ui: &mut Ui, workspace: &Workspace, address: std::net::SocketAddr) {
+        let p = &mut self.partner;
         ui.add_space(2.);
         let mut add = None;
         ui.horizontal(|ui| {
@@ -303,7 +329,18 @@ impl PartnerForm {
             ui.push_id(("intake", i), |ui| {
                 form::card(ui, |ui| {
                     match channel {
-                        Receive::Http { path } => field(ui, "HTTP path", path),
+                        Receive::Http { path } => {
+                            field(ui, "HTTP path", path);
+                            // Show the full address partners post to, ready to copy.
+                            let url = local_url(address, path);
+                            ui.horizontal(|ui| {
+                                ui.add(egui::Label::new(muted(&url).monospace()).truncate())
+                                    .on_hover_text("Partners send messages to this address");
+                                if ui.small_button("Copy").clicked() {
+                                    ui.ctx().copy_text(url.clone());
+                                }
+                            });
+                        }
                         Receive::Folder { directory, suffix } => {
                             ui.horizontal_top(|ui| {
                                 let suffix_width = 104.;
@@ -384,6 +421,75 @@ impl PartnerForm {
                 if ui.small_button("Add header").clicked() {
                     self.headers.push(Default::default());
                 }
+            }
+        });
+    }
+}
+
+/// The address a local HTTP intake listens on, with a loopback host when
+/// Vendredi listens on every interface.
+pub(super) fn local_url(mut address: std::net::SocketAddr, path: &str) -> String {
+    if address.ip().is_unspecified() {
+        address.set_ip(if address.is_ipv4() {
+            std::net::Ipv4Addr::LOCALHOST.into()
+        } else {
+            std::net::Ipv6Addr::LOCALHOST.into()
+        });
+    }
+    format!("http://{address}{path}")
+}
+
+impl PartnerForm {
+    /// The last step: which case answers the partner, and acknowledgements.
+    fn behaves(&mut self, ui: &mut Ui, workspace: &Workspace) {
+        let p = &mut self.partner;
+        form::label(ui, "Answer with a case");
+        ui.label(muted(
+            "A case holds the rules that answer this partner's messages. You can change it any time on the Cases page.",
+        ));
+        ui.add_space(GAP_XS);
+        let cases: Vec<_> = workspace
+            .cases
+            .iter()
+            .filter(|c| c.standard == p.standard)
+            .collect();
+        ScrollArea::vertical()
+            .id_salt("setup cases")
+            .max_height(220.)
+            .show(ui, |ui| {
+                for c in &cases {
+                    let selected = p.case.as_deref() == Some(c.id.as_str());
+                    let text = if c.description.is_empty() {
+                        c.name.clone()
+                    } else {
+                        format!("{} — {}", c.name, c.description)
+                    };
+                    if ui.selectable_label(selected, text).clicked() {
+                        p.case = Some(c.id.clone());
+                    }
+                }
+                if ui
+                    .selectable_label(p.case.is_none(), "No case yet: only acknowledge")
+                    .clicked()
+                {
+                    p.case = None;
+                }
+            });
+        if cases.is_empty() {
+            ui.label(muted(format!(
+                "No {} cases are installed. Install the starter cases on the Cases page.",
+                p.standard.label()
+            )));
+        }
+        ui.add_space(GAP_S);
+        form::label(ui, "Send acknowledgements");
+        ui.horizontal_wrapped(|ui| {
+            for (v, s) in [
+                (Policy::Always, "Always"),
+                (Policy::Requested, "When requested"),
+                (Policy::Never, "Never"),
+            ] {
+                ui.radio_value(&mut p.acknowledge, v, s);
             }
         });
     }
@@ -479,20 +585,48 @@ impl Desktop {
             return;
         };
         let mut close = false;
-        let title = if form.index.is_some() {
-            "Edit partner"
-        } else {
-            "Add partner"
+        let title = match (form.step, form.index) {
+            (Some(_), None) => "Add a partner",
+            (Some(_), Some(_)) => "Describe your partner",
+            (None, Some(_)) => "Edit partner",
+            (None, None) => "Add partner",
         };
+        let address = self.address;
         let escaped = form::modal(ctx, "partner editor", title, 560., |ui| {
+            if let Some(step) = form.step {
+                // Where the guided setup is: "2 of 3 · How it connects".
+                ui.label(
+                    RichText::new(format!("{} of {} · {}", step + 1, STEPS.len(), STEPS[step]))
+                        .color(BLUE)
+                        .font(bold(12.)),
+                );
+                ui.add_space(GAP_XS);
+            }
             ScrollArea::vertical()
                 .max_height((ctx.content_rect().height() - 220.).max(100.))
-                .show(ui, |ui| form.fields(ui, &self.workspace));
+                .show(ui, |ui| match form.step {
+                    None => form.fields(ui, &self.workspace, address),
+                    Some(0) => form.who(ui, &self.workspace),
+                    Some(1) => form.connects(ui, &self.workspace, address),
+                    Some(_) => form.behaves(ui, &self.workspace),
+                });
             if !form.error.is_empty() {
                 ui.colored_label(AMBER, &form.error);
             }
             form::footer(ui, |ui| {
-                if button(ui, "Save partner", true).clicked() {
+                let last = form.step.is_none_or(|s| s + 1 == STEPS.len());
+                if !last {
+                    let problem = form.step_problem();
+                    if ui
+                        .add_enabled(problem.is_none(), styled("Next", true, BUTTON))
+                        .on_disabled_hover_text(problem.unwrap_or_default())
+                        .clicked()
+                    {
+                        form.step = form.step.map(|s| s + 1);
+                        form.error.clear();
+                    }
+                }
+                if last && button(ui, "Save partner", true).clicked() {
                     match form
                         .configuration(self)
                         .and_then(|doc| self.save_configuration(doc, None))
@@ -510,10 +644,21 @@ impl Desktop {
                 if button(ui, "Cancel", false).clicked() {
                     close = true;
                 }
+                if form.step.is_some_and(|s| s > 0) && button(ui, "Back", false).clicked() {
+                    form.step = form.step.map(|s| s - 1);
+                }
             });
         });
         if !close && !escaped {
             self.partner_form = Some(form);
+        }
+    }
+
+    /// The guided setup for a new partner, or to describe an existing one.
+    pub(super) fn open_partner_setup(&mut self, index: Option<usize>) {
+        self.open_partner(index);
+        if let Some(form) = &mut self.partner_form {
+            form.step = Some(0);
         }
     }
 }
@@ -534,6 +679,14 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = Desktop::open(dir.path().into(), &ctx)?;
         click(&mut app, &ctx, "+ Add partner")?;
+        // The guided setup asks who the partner is before going on.
+        assert_eq!(app.partner_form.as_ref().unwrap().step, Some(0));
+        assert!(app.partner_form.as_ref().unwrap().step_problem().is_some());
+        let form = app.partner_form.as_mut().context("missing partner form")?;
+        form.partner.name = "North Freight".into();
+        form.partner.identity[0] = "NORTH".into();
+        click(&mut app, &ctx, "Next")?;
+        assert_eq!(app.partner_form.as_ref().unwrap().step, Some(1));
         click(&mut app, &ctx, "Folder")?;
         click(&mut app, &ctx, "HTTP")?;
         assert!(matches!(
@@ -548,9 +701,9 @@ mod tests {
         click(&mut app, &ctx, "+ Add channel")?;
         click(&mut app, &ctx, "HTTP path")?;
         assert_eq!(app.partner_form.as_ref().unwrap().partner.receive.len(), 2);
-        let form = app.partner_form.as_mut().context("missing partner form")?;
-        form.partner.name = "North Freight".into();
-        form.partner.identity[0] = "NORTH".into();
+        click(&mut app, &ctx, "Next")?;
+        // The last step chooses the case that answers the partner.
+        app.partner_form.as_mut().unwrap().partner.case = Some("reject-orders".into());
         click(&mut app, &ctx, "Save partner")?;
         ensure!(
             app.partner_form.is_none(),
@@ -559,6 +712,7 @@ mod tests {
         );
         let w = Workspace::load(dir.path())?;
         assert_eq!(w.partners[1].name, "North Freight");
+        assert_eq!(w.partners[1].case_id(), Some("reject-orders"));
         assert!(dir.path().join("inbox-2").is_dir());
         click(&mut app, &ctx, "Supplier")?;
         click(&mut app, &ctx, "Edit partner")?;
@@ -620,6 +774,8 @@ mod tests {
         x.ta1 = true;
         x.version = "004010".into();
         x.delimiters = Some("*^:~".into());
+        click(&mut app, &ctx, "Next")?;
+        click(&mut app, &ctx, "Next")?;
         click(&mut app, &ctx, "Save partner")?;
         let error = app.partner_form.as_ref().map(|f| f.error.clone());
         assert!(

@@ -105,7 +105,7 @@ impl Desktop {
                     }
                     ui.add_space(GAP_XS);
                     if add_partner_button(ui) {
-                        self.open_partner(None);
+                        self.open_partner_setup(None);
                     }
                     ui.add_space(GAP_XL);
                     section(ui, "  WORKSPACE");

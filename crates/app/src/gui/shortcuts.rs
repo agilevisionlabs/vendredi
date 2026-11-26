@@ -101,7 +101,7 @@ impl Desktop {
                     error: String::new(),
                 });
             }
-            Do::New | Do::NewPartner => self.open_partner(None),
+            Do::New | Do::NewPartner => self.open_partner_setup(None),
             Do::Send => self.open_send(),
             Do::Save => {
                 if matches!(self.view, View::Documents | View::Config)
