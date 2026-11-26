@@ -461,8 +461,9 @@ class LocalExchange(unittest.TestCase):
         changed.write_text(json.dumps(case))
         result = subprocess.run([BINARY, "case", "test", changed], capture_output=True, text=True)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("FAIL  send-invoice — initiate Invoice", result.stdout)
-        self.assertIn("ok    send-invoice — sample Order", result.stdout)
+        # The dash between case and check may be re-encoded by the Windows console.
+        self.assertRegex(result.stdout, r"FAIL  send-invoice \S+ initiate Invoice")
+        self.assertRegex(result.stdout, r"ok    send-invoice \S+ sample Order")
         self.assertIn("reply 1 (expected.edi) differs at byte 73", result.stdout)
 
     def x12_workspace(self, actions=None, send='directory = "out"'):
