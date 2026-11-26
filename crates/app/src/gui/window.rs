@@ -254,8 +254,9 @@ impl Desktop {
                             top: 0,
                             bottom: 0,
                         })
-                        .desired_width(width)
-                        .min_size(vec2(width, BUTTON))
+                        // The width excludes the 38 px of side margins.
+                        .desired_width(width - 38.)
+                        .min_size(vec2(width - 38., BUTTON))
                         .vertical_align(Align::Center),
                 )
             });
@@ -263,7 +264,7 @@ impl Desktop {
                 field.inner.rect.left_center() + vec2(15., 0.),
                 Align2::CENTER_CENTER,
                 icon::MAGNIFYING_GLASS,
-                ty::icon(),
+                icon_font(15.),
                 col::muted(),
             );
             let tip = shortcuts::hint(ui.ctx(), "Search traffic", &shortcuts::SEARCH);

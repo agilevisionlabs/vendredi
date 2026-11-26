@@ -348,7 +348,7 @@ fn choice_card(ui: &mut egui::Ui, glyph: &str, title: &str, text: &str) -> egui:
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal_top(|ui| {
-                ui.label(RichText::new(glyph).size(24.).color(col::blue()));
+                ui.label(icon_job(glyph, icon_font(22.), col::blue()));
                 ui.add_space(GAP_S);
                 ui.vertical(|ui| {
                     ui.label(RichText::new(title).font(ty::section()).color(col::text()));

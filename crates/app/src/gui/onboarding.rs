@@ -162,11 +162,7 @@ impl Desktop {
                         } else {
                             col::secondary_text()
                         };
-                        ui.label(
-                            RichText::new(format!("{mark} {label}"))
-                                .size(ty::SMALL)
-                                .color(color),
-                        );
+                        ui.label(icon_job(&format!("{mark} {label}"), ty::small(), color));
                         if Some(*step) == next {
                             let action = match step {
                                 Step::Sample => "Send",

@@ -617,6 +617,7 @@ impl Desktop {
                 }
             }
         }
+        self.sends(ui, c);
     }
 
     /// The expected replies of each sample, to open and edit by hand or
@@ -665,7 +666,13 @@ impl Desktop {
         {
             self.fail(format!("{e:#}"));
         }
-        // Partner-initiated sends: a named document the partner sends by itself.
+    }
+
+    /// Partner-initiated sends: a named document the partner sends by itself.
+    fn sends(&mut self, ui: &mut Ui, c: &Case) {
+        let editable = c.source.is_none();
+        ui.add_space(GAP_M);
+        ui.separator();
         ui.add_space(GAP_S);
         section_row(ui, |ui| {
             form::label(ui, "Partner sends on its own");
@@ -687,7 +694,7 @@ impl Desktop {
             }
         });
         if c.initiate.is_empty() {
-            ui.label(prose("Nothing yet. A send here becomes a button above, and a command: initiate <partner> <name>."));
+            ui.label(prose("Nothing yet. Each send becomes a Partner sends button under Try it, and the command initiate <partner> <name>."));
         }
         let mut drop = None;
         for i in &c.initiate {
@@ -943,11 +950,7 @@ impl Desktop {
                     } else {
                         (icon::WARNING_CIRCLE, col::amber())
                     };
-                    let line = ui.label(
-                        RichText::new(format!("{mark} {check}"))
-                            .size(ty::SMALL)
-                            .color(color),
-                    );
+                    let line = ui.label(icon_job(&format!("{mark} {check}"), ty::small(), color));
                     if !failures.is_empty() {
                         line.on_hover_text(failures.join("\n"));
                     }

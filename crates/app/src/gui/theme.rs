@@ -195,8 +195,17 @@ pub(super) fn install(ctx: &Context) {
             .or_default()
             .insert(0, name.into());
     }
-    // Icons come from Phosphor, after the text faces.
+    // Icons come from Phosphor, in a family of their own. Inter has glyphs
+    // at some of Phosphor's private code points, and Phosphor has glyphs for
+    // letters, so neither may stand in for the other: labels are split into
+    // text runs and icon runs (`icon_job`).
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+    for keys in fonts.families.values_mut() {
+        keys.retain(|k| k != "phosphor");
+    }
+    fonts
+        .families
+        .insert(FontFamily::Name(ICONS.into()), vec!["phosphor".into()]);
     ctx.set_fonts(fonts);
     for (theme, palette) in [(Theme::Light, &LIGHT), (Theme::Dark, &DARK)] {
         ctx.set_visuals_of(theme, visuals(theme, palette));
@@ -253,10 +262,6 @@ pub(super) mod ty {
     }
     pub fn caption() -> FontId {
         font(CAPTION)
-    }
-    /// Icons drawn on their own, next to text.
-    pub fn icon() -> FontId {
-        font(LEAD)
     }
     pub fn code() -> FontId {
         mono(SMALL)
@@ -358,7 +363,7 @@ pub(super) fn nav(
         r.left_center() + vec2(10., 0.),
         Align2::LEFT_CENTER,
         glyph,
-        ty::icon(),
+        icon_font(15.),
         if selected { col::blue() } else { col::muted() },
     );
     p.galley(
@@ -419,6 +424,51 @@ pub(super) fn line(ui: &Ui, a: Pos2, b: Pos2) {
 }
 /// The icon set. Labels put an icon before their text with `with_icon`.
 pub(super) use egui_phosphor::regular as icon;
+
+/// The font family that holds only the icons.
+pub(super) const ICONS: &str = "Icons";
+
+/// Icons live in Unicode's private use area.
+fn is_icon(c: char) -> bool {
+    ('\u{E000}'..='\u{F8FF}').contains(&c)
+}
+
+/// The font for an icon of the given size.
+pub(super) fn icon_font(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name(ICONS.into()))
+}
+
+/// Text with icons in it, laid out so each icon uses the icon font and
+/// the rest uses `font`.
+pub(super) fn icon_job(text: &str, font: FontId, color: Color32) -> text::LayoutJob {
+    let mut job = text::LayoutJob::default();
+    let mut start = 0;
+    let mut icon_run = None;
+    for (i, c) in text.char_indices().chain([(text.len(), ' ')]) {
+        let icon = i < text.len() && is_icon(c);
+        if icon_run.is_some_and(|r| r != icon) || i == text.len() {
+            if start < i {
+                let face = if icon_run == Some(true) {
+                    // Icons sit a little larger than the text beside them.
+                    icon_font(font.size + 2.)
+                } else {
+                    font.clone()
+                };
+                job.append(
+                    &text[start..i],
+                    0.,
+                    text::TextFormat {
+                        valign: Align::Center,
+                        ..text::TextFormat::simple(face, color)
+                    },
+                );
+            }
+            start = i;
+        }
+        icon_run = Some(icon);
+    }
+    job
+}
 pub(super) use vendredi_core::engine::local_time as time;
 
 pub(super) fn with_icon(icon: &str, text: &str) -> String {
@@ -482,9 +532,9 @@ pub(super) fn header_row(ui: &mut Ui, contents: impl FnOnce(&mut Ui)) {
 pub(super) const BUTTON: f32 = 36.;
 pub(super) const SMALL_BUTTON: f32 = 28.;
 
-pub(super) fn styled(label: &str, primary: bool, height: f32) -> Button<'_> {
-    let text = RichText::new(label).color(if primary { Color32::WHITE } else { col::text() });
-    Button::new(text)
+pub(super) fn styled(label: &str, primary: bool, height: f32) -> Button<'static> {
+    let color = if primary { Color32::WHITE } else { col::text() };
+    Button::new(icon_job(label, ty::body(), color))
         .min_size(vec2(0., height))
         .fill(if primary { col::blue() } else { col::surface() })
         .stroke(Stroke::new(
@@ -552,11 +602,14 @@ pub(super) fn add_partner_button(ui: &mut Ui) -> bool {
         3.,
         2.,
     ));
-    ui.painter().text(
-        r.left_center() + vec2(10., 0.),
-        Align2::LEFT_CENTER,
+    let galley = ui.painter().layout_job(icon_job(
         &with_icon(icon::PLUS, "Add partner"),
         ty::body(),
+        col::muted(),
+    ));
+    ui.painter().galley(
+        r.left_center() + vec2(10., -galley.size().y / 2.),
+        galley,
         col::muted(),
     );
     res.widget_info(|| WidgetInfo::labeled(WidgetType::Button, true, "Add partner"));
@@ -618,6 +671,24 @@ mod tests {
     }
 
     #[test]
+    fn icons_have_their_own_font_family() {
+        let ctx = Context::default();
+        install(&ctx);
+        let _ = ctx.run(Default::default(), |_| {});
+        let fonts = ctx.fonts(|f| f.definitions().clone());
+        assert_eq!(
+            fonts.families[&FontFamily::Name(ICONS.into())],
+            ["phosphor"]
+        );
+        // Text faces never fall back to the icons, which include letters.
+        for (family, keys) in &fonts.families {
+            if family != &FontFamily::Name(ICONS.into()) {
+                assert!(!keys.iter().any(|k| k == "phosphor"), "{family:?}");
+            }
+        }
+    }
+
+    #[test]
     fn button_icons_have_glyphs() {
         let ctx = Context::default();
         install(&ctx);
@@ -630,10 +701,7 @@ mod tests {
         ]
         .map(|s| s.chars().next().unwrap())
         {
-            assert!(
-                ctx.fonts_mut(|f| f.has_glyph(&FontId::proportional(13.), c)),
-                "{c}"
-            );
+            assert!(ctx.fonts_mut(|f| f.has_glyph(&icon_font(13.), c)), "{c}");
         }
     }
 }
@@ -694,6 +762,10 @@ pub(super) fn empty_state(ui: &mut Ui, title: &str, text: &str, actions: impl Fn
         ui.add_space(GAP_XS);
         ui.label(RichText::new(text).color(col::secondary_text()));
         ui.add_space(GAP_M);
-        ui.horizontal(actions);
+        ui.horizontal(|ui| {
+            // Some lists zero their spacing; the actions keep their own.
+            ui.spacing_mut().item_spacing.x = GAP_S;
+            actions(ui);
+        });
     });
 }
