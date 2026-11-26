@@ -5,7 +5,7 @@ use vendredi_core::{edi, script};
 impl Desktop {
     fn send_choices(&self) -> BTreeSet<(String, String)> {
         self.workspace.partners[self.send_partner]
-            .rules
+            .scenario()
             .iter()
             .flat_map(|r| &r.actions)
             .filter_map(|a| match a {

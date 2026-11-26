@@ -169,7 +169,13 @@ mod tests {
         crate::sample(dir.path())?;
         let path = dir.path().join("vendredi.toml");
         fs::write(&path, fs::read_to_string(&path)?.replace(":8180", ":0"))?;
-        let doc = dir.path().join("confirmation.edi");
+        // The Documents view lists the documents the active cases send.
+        let case = dir.path().join("cases/confirm-orders/case.json");
+        let mut json: serde_json::Value = serde_json::from_slice(&fs::read(&case)?)?;
+        json["rules"][0]["actions"] = serde_json::json!([{"document": "confirmation.edi"}]);
+        fs::write(&case, serde_json::to_vec(&json)?)?;
+        let doc = dir.path().join("cases/confirm-orders/confirmation.edi");
+        fs::copy(dir.path().join("confirmation.edi"), &doc)?;
         let mut bytes = fs::read(&doc)?;
         // Put the accented character in the message body, leaving the EDIFACT header intact.
         let body = bytes.windows(5).position(|s| s == b"REPLY").unwrap();

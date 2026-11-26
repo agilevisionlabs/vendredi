@@ -504,7 +504,7 @@ impl Engine {
                 name,
             ),
         )?;
-        let case = self.workspace.partners[p].case_id().to_owned();
+        let case = self.workspace.partners[p].case_id().map(str::to_owned);
         self.event(
             "execution",
             root,
@@ -880,17 +880,15 @@ impl Engine {
         let t = self.task(p, None, (None, None), "command: send", vec![action], None)?;
         self.execute(t)
     }
-    /// Switches a partner to an installed case, or `default` for its own
-    /// rules, and records the choice in `vendredi.toml`.
+    /// Switches a partner to an installed case and records the choice in
+    /// `vendredi.toml`.
     pub fn use_case(&mut self, name: &str, id: &str) -> Result<()> {
         let p = self.partner(name)?;
         let mut partner = self.workspace.partners[p].clone();
-        let from = partner.case_id().to_owned();
+        let from = partner.case_id().map(str::to_owned);
         partner.activate(&self.workspace.cases, id)?;
-        if id != crate::case::DEFAULT {
-            // Re-read the files so edits since the workspace opened are checked.
-            crate::case::Bundle::load(&self.workspace.root.join(crate::case::DIRECTORY).join(id))?;
-        }
+        // Re-read the files so edits since the workspace opened are checked.
+        crate::case::Bundle::load(&self.workspace.root.join(crate::case::DIRECTORY).join(id))?;
         crate::config::persist_case(&self.workspace.root, name, id)?;
         self.workspace.partners[p] = partner;
         self.event(
@@ -904,7 +902,10 @@ impl Engine {
     pub fn sample(&mut self, name: &str, sample: &str) -> Result<i64> {
         let p = self.partner(name)?;
         let partner = &self.workspace.partners[p];
-        let id = partner.case_id().to_owned();
+        let id = partner
+            .case_id()
+            .with_context(|| format!("partner {name} has no active case"))?
+            .to_owned();
         let case = self
             .workspace
             .cases
@@ -965,7 +966,7 @@ impl Engine {
             .with_context(|| {
                 format!(
                     "case {} has no partner-initiated send named {send}",
-                    partner.case_id()
+                    partner.case_id().unwrap_or("(none)")
                 )
             })?
             .clone();
@@ -1034,16 +1035,13 @@ mod tests {
     const ORDER: &[u8] = include_bytes!("../../../examples/orders/order.edi");
     fn fixture() -> Result<(tempfile::TempDir, Workspace)> {
         let dir = tempfile::tempdir()?;
-        fs::write(
-            dir.path().join("vendredi.toml"),
-            include_str!("../../../examples/orders/vendredi.toml"),
-        )?;
-        fs::write(
-            dir.path().join("confirmation.edi"),
-            include_bytes!("../../../examples/orders/confirmation.edi"),
-        )?;
+        crate::config::orders_example(dir.path())?;
         let w = Workspace::load(dir.path())?;
         Ok((dir, w))
+    }
+    /// The active case's rules, which tests rewrite in place.
+    fn rules(p: &mut crate::config::Partner) -> &mut Vec<crate::config::Rule> {
+        &mut p.active.as_mut().expect("active case").rules
     }
     fn input(e: &mut Engine, p: usize, bytes: &[u8]) -> Result<i64> {
         let id = e.receive(p, bytes, json!({}), None)?.unwrap();
@@ -1211,7 +1209,7 @@ mod tests {
         let other = input(&mut e, 1, b"bad")?;
         let in_flight = input(&mut e, 0, ORDER)?;
         assert!(!e.take_deliveries().is_empty()); // Leave this exchange awaiting delivery.
-        e.workspace.partners[0].rules[0].actions = vec![Action::Delay { delay_ms: 180_000 }];
+        rules(&mut e.workspace.partners[0])[0].actions = vec![Action::Delay { delay_ms: 180_000 }];
         let delayed = input(&mut e, 0, ORDER)?;
         for d in e.take_deliveries() {
             e.finish_delivery(d.id, Ok(String::new()))?;
@@ -1269,7 +1267,7 @@ mod tests {
             dir.path().join("handle.js"),
             "function run(i,a){a.set('calls',(a.get('calls')||0)+1);a.log(a.now());a.send(a.build('ORDRSP:D:96A:UN', \"BGM+231'\"))}",
         )?;
-        let rule = &mut w.partners[0].rules[0];
+        let rule = &mut rules(&mut w.partners[0])[0];
         rule.actions = vec![
             Action::Delay { delay_ms: 20 },
             Action::Script {
@@ -1279,7 +1277,7 @@ mod tests {
         ];
         let mut other = w.partners[0].clone();
         other.name = "Other".into();
-        other.rules[0].actions = vec![
+        rules(&mut other)[0].actions = vec![
             Action::Fault {
                 fault: Fault::SuppressAck,
             },
@@ -1358,7 +1356,7 @@ mod tests {
         fs::write(dir.join("reply.js"), source)?;
         let mut w = w.clone();
         w.partners[0].acknowledge = Policy::Never;
-        w.partners[0].rules[0].actions = vec![Action::Script {
+        rules(&mut w.partners[0])[0].actions = vec![Action::Script {
             script: "reply.js".into(),
             function: "reply".into(),
         }];
@@ -1451,7 +1449,7 @@ mod tests {
             dir.path().join("reply.js"),
             "function reply(i, api) { api.send(api.build('ORDRSP', 'D96A', [['UNZ', '1']])); }",
         )?;
-        w.partners[0].rules[0].actions = vec![Action::Script {
+        rules(&mut w.partners[0])[0].actions = vec![Action::Script {
             script: "reply.js".into(),
             function: "reply".into(),
         }];
@@ -1489,7 +1487,7 @@ mod tests {
             include_str!("../../../examples/cases/send-invoice.json"),
         )?;
         let w = Workspace::load(dir.path())?;
-        assert_eq!(w.cases.len(), 2);
+        assert_eq!(w.cases.len(), 3);
         let clock = Arc::new(Manual(AtomicI64::new(1000)));
         let mut e = Engine::open(w, clock.clone())?;
         e.use_case("Supplier", "reject-orders")?;
@@ -1532,16 +1530,15 @@ mod tests {
         assert!(e.use_case("Supplier", "not-installed").is_err());
         drop(e);
         let w = Workspace::load(dir.path())?;
-        assert_eq!(w.partners[0].case_id(), "send-invoice");
-        assert_eq!(w.partners[0].cases, ["reject-orders", "send-invoice"]);
+        assert_eq!(w.partners[0].case_id(), Some("send-invoice"));
         let mut e = Engine::open(w, clock)?;
-        e.use_case("Supplier", "default")?;
+        e.use_case("Supplier", "orders")?;
         input(&mut e, 0, ORDER)?;
         assert_eq!(e.take_deliveries().len(), 2);
         drop(e);
         assert_eq!(
             Workspace::load(dir.path())?.partners[0].case_id(),
-            "default"
+            Some("orders")
         );
         Ok(())
     }
@@ -1575,7 +1572,7 @@ mod tests {
         fs::remove_dir_all(&folder)?;
         let error = format!("{:#}", Workspace::load(dir.path()).unwrap_err());
         assert!(
-            error.contains("confirm-orders, which is not installed"),
+            error.contains("case confirm-orders is not installed"),
             "{error}"
         );
         Ok(())
@@ -1589,9 +1586,15 @@ mod tests {
             dir.path().join("vendredi.toml"),
             include_str!("../../../examples/x12/vendredi.toml"),
         )?;
+        let case = dir.path().join("cases/orders");
+        fs::create_dir_all(&case)?;
         fs::write(
-            dir.path().join("855.edi"),
-            include_bytes!("../../../examples/x12/855.edi"),
+            case.join("case.json"),
+            include_bytes!("../../../examples/x12/cases/orders/case.json"),
+        )?;
+        fs::write(
+            case.join("855.edi"),
+            include_bytes!("../../../examples/x12/cases/orders/855.edi"),
         )?;
         let w = Workspace::load(dir.path())?;
         Ok((dir, w))
@@ -1738,12 +1741,12 @@ mod tests {
         let settings = w.partners[0].x12.as_mut().unwrap();
         settings.ta1 = true;
         settings.acknowledgement = GroupAck::ImplementationAck;
-        w.partners[0].rules[0].actions = vec![
+        rules(&mut w.partners[0])[0].actions = vec![
             Action::Fault {
                 fault: Fault::WrongCount,
             },
             Action::Document {
-                document: "855.edi".into(),
+                document: "cases/orders/855.edi".into(),
             },
         ];
         let mut e = Engine::open(w.clone(), Arc::new(SystemClock))?;
@@ -1786,7 +1789,7 @@ mod tests {
         );
 
         // A rejected interchange gets a rejecting TA1 and 999 and no 855.
-        w.partners[0].rules[0].actions = vec![Action::Fault {
+        rules(&mut w.partners[0])[0].actions = vec![Action::Fault {
             fault: Fault::Reject,
         }];
         fs::remove_dir_all(dir.path().join(".vendredi"))?;
@@ -1818,7 +1821,7 @@ mod tests {
         )?;
         w.partners[0].x12 = Some(Default::default());
         w.partners[0].acknowledge = Policy::Never;
-        w.partners[0].rules[0].actions = vec![Action::Script {
+        rules(&mut w.partners[0])[0].actions = vec![Action::Script {
             script: "reply.js".into(),
             function: "reply".into(),
         }];
@@ -1843,7 +1846,7 @@ mod tests {
     fn bad_input_and_failed_script_leave_engine_available() -> Result<()> {
         let (dir, mut w) = fixture()?;
         fs::write(dir.path().join("bad.js"), "function fail(){while(true){}}")?;
-        w.partners[0].rules[0].actions = vec![Action::Script {
+        rules(&mut w.partners[0])[0].actions = vec![Action::Script {
             script: "bad.js".into(),
             function: "fail".into(),
         }];

@@ -47,13 +47,12 @@ pub struct Partner {
     /// Envelope and acknowledgement settings for X12 partners.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub x12: Option<X12>,
-    /// The partner's own rules, which form its default case.
-    #[serde(default)]
-    pub rules: Vec<Rule>,
-    /// Installed cases attached to this partner.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub cases: Vec<String>,
-    /// The active case. Absent or `default` selects the partner's own rules.
+    /// Rules used to live here. They now belong to cases, so a workspace
+    /// that still has them gets an explanation instead of a parse error.
+    #[serde(default, rename = "rules", skip_serializing)]
+    pub legacy_rules: Option<toml::Value>,
+    /// The active case, whose rules answer this partner. Without one the
+    /// partner only acknowledges what it receives.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub case: Option<String>,
     /// The active case's rules and settings, resolved when the workspace loads.
@@ -171,9 +170,9 @@ pub struct Active {
     pub initiate: Vec<case::Initiate>,
 }
 impl Partner {
-    /// The rules of the active case, or the partner's own rules.
+    /// The rules of the active case, with workspace-relative paths.
     pub fn scenario(&self) -> &[Rule] {
-        self.active.as_ref().map_or(&self.rules, |a| &a.rules)
+        self.active.as_ref().map_or(&[], |a| &a.rules)
     }
     pub fn policy(&self) -> Policy {
         self.active
@@ -181,17 +180,12 @@ impl Partner {
             .and_then(|a| a.acknowledge)
             .unwrap_or(self.acknowledge)
     }
-    /// The id of the active case, `default` for the partner's own rules.
-    pub fn case_id(&self) -> &str {
-        self.active.as_ref().map_or(case::DEFAULT, |a| &a.id)
+    /// The id of the active case.
+    pub fn case_id(&self) -> Option<&str> {
+        self.active.as_ref().map(|a| a.id.as_str())
     }
-    /// Selects a case from the workspace library, or the default case.
+    /// Selects a case from the workspace library.
     pub fn activate(&mut self, cases: &[Case], id: &str) -> Result<()> {
-        if id == case::DEFAULT {
-            self.active = None;
-            self.case = None;
-            return Ok(());
-        }
         let c = cases
             .iter()
             .find(|c| c.id == id)
@@ -225,9 +219,6 @@ impl Partner {
             initiate,
         });
         self.case = Some(id.into());
-        if !self.cases.iter().any(|c| c == id) {
-            self.cases.push(id.into());
-        }
         Ok(())
     }
     /// The X12 settings, or their defaults.
@@ -379,21 +370,10 @@ impl Workspace {
         w.cases = case::library(&w.root)?;
         let cases = std::mem::take(&mut w.cases);
         for p in &mut w.partners {
-            for id in &p.cases {
-                ensure!(
-                    cases.iter().any(|c| c.id == *id),
-                    "{}: partner {} attaches case {id}, which is not installed under {}/",
-                    path.display(),
-                    p.name,
-                    case::DIRECTORY
-                );
-            }
             if let Some(id) = p.case.clone() {
                 p.activate(&cases, &id)
                     .with_context(|| path.display().to_string())?;
-                if id != case::DEFAULT {
-                    case::Bundle::load(&w.root.join(case::DIRECTORY).join(&id))?;
-                }
+                case::Bundle::load(&w.root.join(case::DIRECTORY).join(&id))?;
             }
         }
         w.cases = cases;
@@ -417,6 +397,13 @@ impl Workspace {
             ensure!(
                 !p.identity.is_empty() && !p.identity[0].is_empty(),
                 "partner identity required"
+            );
+            ensure!(
+                p.legacy_rules.is_none(),
+                "partner {}: rules now live in cases. Move them into {}/<id>/{} and set case = \"<id>\"",
+                p.name,
+                case::DIRECTORY,
+                case::FILE
             );
             match p.standard {
                 Standard::Edifact => {
@@ -485,28 +472,6 @@ impl Workspace {
                     outputs.insert(channel_directory(&self.root, directory)?);
                 }
             }
-            for rule in &p.rules {
-                for action in &rule.actions {
-                    let check = (|| -> Result<()> {
-                        match action {
-                            Action::Document { document } => {
-                                crate::interchange::document(
-                                    p.standard,
-                                    &fs::read(self.root.join(document))
-                                        .with_context(|| document.display().to_string())?,
-                                )?;
-                            }
-                            Action::Script { script, .. } => {
-                                crate::script::read_source(self.root.join(script))
-                                    .with_context(|| script.display().to_string())?;
-                            }
-                            _ => {}
-                        }
-                        Ok(())
-                    })();
-                    check.with_context(|| format!("partner {}, rule {}", p.name, rule.name))?;
-                }
-            }
         }
         ensure!(
             outputs.is_disjoint(&folders),
@@ -516,9 +481,9 @@ impl Workspace {
     }
 }
 /// Records a partner's active case in `vendredi.toml`, keeping the rest of the
-/// file as written. The default case removes the setting.
+/// file as written.
 pub fn persist_case(root: &Path, partner: &str, id: &str) -> Result<()> {
-    use toml_edit::{Array, DocumentMut, value};
+    use toml_edit::{DocumentMut, value};
     let path = root.join("vendredi.toml");
     let mut doc: DocumentMut = fs::read_to_string(&path)?.parse()?;
     let partners = doc
@@ -529,19 +494,7 @@ pub fn persist_case(root: &Path, partner: &str, id: &str) -> Result<()> {
         .iter_mut()
         .find(|t| t.get("name").and_then(|n| n.as_str()) == Some(partner))
         .with_context(|| format!("partner {partner} is not in vendredi.toml"))?;
-    if id == case::DEFAULT {
-        table.remove("case");
-    } else {
-        let attached = table
-            .entry("cases")
-            .or_insert_with(|| value(Array::new()))
-            .as_array_mut()
-            .context("expected cases to be a list")?;
-        if !attached.iter().any(|v| v.as_str() == Some(id)) {
-            attached.push(id);
-        }
-        table.insert("case", value(id));
-    }
+    table.insert("case", value(id));
     let mut file = tempfile_in(root)?;
     std::io::Write::write_all(&mut file.0, doc.to_string().as_bytes())?;
     file.0.sync_all()?;
@@ -565,36 +518,70 @@ fn channel_directory(root: &Path, path: &Path) -> Result<PathBuf> {
     Ok(dir.canonicalize()?)
 }
 
+/// Writes the `examples/orders` workspace, with a copy of the confirmation
+/// at the root for tests that send it directly.
+#[cfg(test)]
+pub(crate) fn orders_example(dir: &Path) -> Result<()> {
+    let case = dir.join(case::DIRECTORY).join("orders");
+    fs::create_dir_all(&case)?;
+    let confirmation = include_bytes!("../../../examples/orders/cases/orders/confirmation.edi");
+    for (path, bytes) in [
+        (
+            dir.join("vendredi.toml"),
+            include_bytes!("../../../examples/orders/vendredi.toml").as_slice(),
+        ),
+        (
+            case.join(case::FILE),
+            include_bytes!("../../../examples/orders/cases/orders/case.json"),
+        ),
+        (case.join("confirmation.edi"), confirmation),
+        (dir.join("confirmation.edi"), confirmation),
+    ] {
+        fs::write(path, bytes)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn bundled_workspace_loads_and_identifies_bad_rule() -> Result<()> {
+    fn bundled_workspace_loads_and_identifies_bad_case() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        fs::write(
-            dir.path().join("vendredi.toml"),
-            include_str!("../../../examples/orders/vendredi.toml"),
-        )?;
-        let err = Workspace::load(dir.path()).unwrap_err();
-        assert!(format!("{err:#}").contains("Confirm orders"));
-        fs::write(
-            dir.path().join("confirmation.edi"),
-            include_bytes!("../../../examples/orders/confirmation.edi"),
-        )?;
+        orders_example(dir.path())?;
         let w = Workspace::load(dir.path())?;
         let p = crate::interchange::parse(include_bytes!("../../../examples/orders/order.edi"));
-        assert!(w.partners[0].rules[0].matches(&p.interchanges[0].messages()[0]));
+        let rules = w.partners[0].scenario();
+        assert!(rules[0].matches(&p.interchanges[0].messages()[0]));
+        // Active rules point into the case folder.
+        assert!(matches!(&rules[0].actions[0],
+            Action::Document { document } if document == Path::new("cases/orders/confirmation.edi")));
+        assert_eq!(w.partners[0].case_id(), Some("orders"));
         assert_eq!(w.partners[0].standard, Standard::Edifact);
+        fs::remove_file(dir.path().join("cases/orders/confirmation.edi"))?;
+        let err = format!("{:#}", Workspace::load(dir.path()).unwrap_err());
+        assert!(err.contains("confirmation.edi"), "{err}");
+        Ok(())
+    }
+    #[test]
+    fn partner_rules_point_to_cases() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        orders_example(dir.path())?;
+        let path = dir.path().join("vendredi.toml");
+        let text = fs::read_to_string(&path)?.replace(
+            "case = \"orders\"\n",
+            "\n[[partners.rules]]\nname = \"Old\"\nmessage = \"ORDERS\"\nactions = []\n",
+        );
+        fs::write(&path, text)?;
+        let err = format!("{:#}", Workspace::load(dir.path()).unwrap_err());
+        assert!(err.contains("rules now live in cases"), "{err}");
         Ok(())
     }
     #[test]
     fn edifact_settings_read_from_either_place() -> Result<()> {
         let dir = tempfile::tempdir()?;
+        orders_example(dir.path())?;
         let base = include_str!("../../../examples/orders/vendredi.toml");
-        fs::write(
-            dir.path().join("confirmation.edi"),
-            include_bytes!("../../../examples/orders/confirmation.edi"),
-        )?;
         fs::write(
             dir.path().join("vendredi.toml"),
             base.replace(

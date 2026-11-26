@@ -1,8 +1,10 @@
 use super::*;
 use egui::{ComboBox, DragValue, ScrollArea, Ui};
-use toml_edit::DocumentMut;
-use vendredi_core::config::{Fault, Rule};
-use workspace_edit::tables;
+use vendredi_core::{
+    case::{self, Case},
+    config::{Fault, Rule},
+};
+use workspace_edit::FileEdit;
 
 fn rule_row(ui: &mut Ui, height: f32, mut cell: impl FnMut(usize, &mut Ui)) {
     let width = ui.available_width();
@@ -33,18 +35,22 @@ fn rule_row(ui: &mut Ui, height: f32, mut cell: impl FnMut(usize, &mut Ui)) {
     }
 }
 
+/// Edits one rule of a case in its `case.json`.
 pub(super) struct RuleForm {
-    partner: usize,
+    case: String,
+    /// `case.json` as it was when the form opened.
+    original: Vec<u8>,
     index: Option<usize>,
     order: usize,
+    count: usize,
     rule: Rule,
-    error: String,
+    pub(super) error: String,
     removing: bool,
 }
 
 impl RuleForm {
-    fn new(workspace: &Workspace, partner: usize, index: Option<usize>) -> Self {
-        let rules = &workspace.partners[partner].rules;
+    pub(super) fn new(root: &Path, case: &Case, index: Option<usize>) -> Self {
+        let rules = &case.rules;
         let mut rule = index.map(|i| rules[i].clone()).unwrap_or_else(|| Rule {
             name: String::new(),
             message: String::new(),
@@ -55,10 +61,13 @@ impl RuleForm {
         // Editors show and save one version, such as D96A, for every standard.
         rule.version = rule.combined_version();
         rule.release = None;
+        let path = case::folder(root, &case.id).join(case::FILE);
         Self {
-            partner,
+            case: case.id.clone(),
+            original: fs::read(path).unwrap_or_default(),
             index,
             order: index.unwrap_or(rules.len()) + 1,
+            count: rules.len() + usize::from(index.is_none()),
             rule,
             error: String::new(),
             removing: false,
@@ -66,14 +75,17 @@ impl RuleForm {
     }
 
     fn save(&self, app: &mut Desktop) -> Result<()> {
-        let mut doc: DocumentMut = app.config_source.parse()?;
-        let partner = tables(doc.as_table_mut(), "partners")?
-            .get_mut(self.partner)
-            .context("missing partner")?;
-        let position = partner.position();
-        let rules = tables(partner, "rules")?;
+        let folder = case::folder(&app.root, &self.case);
+        let mut case = case::Case::parse(&self.original)?;
+        ensure!(
+            app.workspace
+                .cases
+                .iter()
+                .any(|c| c.id == self.case && c.source.is_none()),
+            "This case was imported. Duplicate it to change its rules."
+        );
         if self.removing {
-            rules.remove(self.index.context("select a rule")?);
+            case.rules.remove(self.index.context("select a rule")?);
         } else {
             let rule = &self.rule;
             ensure!(!rule.name.trim().is_empty(), "Enter a rule name.");
@@ -82,73 +94,44 @@ impl RuleForm {
                 "Enter the message type or transaction set."
             );
             for action in &rule.actions {
-                if let Action::Script {
-                    script: path,
-                    function,
-                } = action
-                {
-                    let src = vendredi_core::script::read_source(app.root.join(path))
-                        .with_context(|| format!("Opening {}", path.display()))?;
-                    vendredi_core::script::validate(&src, function)?;
+                match action {
+                    Action::Script {
+                        script: path,
+                        function,
+                    } => {
+                        case::relative(path)?;
+                        let src = vendredi_core::script::read_source(folder.join(path))
+                            .with_context(|| format!("Opening {}", path.display()))?;
+                        vendredi_core::script::validate(&src, function)?;
+                    }
+                    Action::Document { document } => {
+                        case::relative(document)?;
+                        ensure!(
+                            folder.join(document).is_file(),
+                            "{} is not in the case folder cases/{}",
+                            document.display(),
+                            self.case
+                        );
+                    }
+                    _ => {}
                 }
             }
-            let new = toml_edit::ser::to_document(rule)?.into_table();
-            let data = if let Some(i) = self.index {
-                let old =
-                    toml_edit::ser::to_document(&app.workspace.partners[self.partner].rules[i])?;
-                let mut table = rules.remove(i);
-                for key in ["name", "message", "version", "release", "actions"] {
-                    if old.get(key).map(ToString::to_string)
-                        != new.get(key).map(ToString::to_string)
-                    {
-                        if let Some(value) = new.get(key) {
-                            table.insert(key, value.clone());
-                        } else {
-                            table.remove(key);
-                        }
-                    }
-                }
-                table
-            } else {
-                new
-            };
-            rules.insert(self.order - 1, data);
-            if self.order - 1 != self.index.unwrap_or(rules.len() - 1) {
-                // Keep reordered headers and their actions together under this partner.
-                for table in rules.iter_mut() {
-                    table.set_position(position);
-                    if let Some(actions) = table
-                        .get_mut("actions")
-                        .and_then(|v| v.as_array_of_tables_mut())
-                    {
-                        for action in actions.iter_mut() {
-                            action.set_position(position);
-                        }
-                    }
-                }
+            if let Some(i) = self.index {
+                case.rules.remove(i);
             }
+            case.rules.insert(self.order - 1, rule.clone());
         }
-        app.save_configuration(doc.to_string(), None)
+        let json = case::to_json(&case)?;
+        app.apply_files(&[FileEdit {
+            path: &folder.join(case::FILE),
+            before: Some(&self.original),
+            after: json.as_bytes(),
+        }])
     }
 
-    fn fields(&mut self, ui: &mut Ui, workspace: &Workspace) {
-        let p = &workspace.partners[self.partner];
-        form::label(ui, "Partner");
-        if self.index.is_some() {
-            ui.label(&p.name);
-        } else {
-            let previous = self.partner;
-            ComboBox::from_id_salt("rule partner")
-                .selected_text(&p.name)
-                .show_ui(ui, |ui| {
-                    for (i, p) in workspace.partners.iter().enumerate() {
-                        ui.selectable_value(&mut self.partner, i, &p.name);
-                    }
-                });
-            if previous != self.partner {
-                self.order = workspace.partners[self.partner].rules.len() + 1;
-            }
-        }
+    fn fields(&mut self, ui: &mut Ui) {
+        form::label(ui, "Case");
+        ui.monospace(&self.case);
         form::field(ui, "Rule name", &mut self.rule.name);
         ui.columns(2, |cols| {
             form::input(
@@ -165,9 +148,7 @@ impl RuleForm {
         });
         ui.horizontal(|ui| {
             form::label(ui, "Match order");
-            let count =
-                workspace.partners[self.partner].rules.len() + usize::from(self.index.is_none());
-            ui.add(DragValue::new(&mut self.order).range(1..=count));
+            ui.add(DragValue::new(&mut self.order).range(1..=self.count));
             ui.label(muted("First matching rule runs."));
         });
         ui.separator();
@@ -278,95 +259,77 @@ impl RuleForm {
 }
 fn path_input(ui: &mut Ui, label: &str, path: &mut PathBuf) {
     let mut s = path.display().to_string();
-    if form::input(ui, label, &mut s, "Workspace path").changed() {
+    if form::input(ui, label, &mut s, "Path inside the case folder").changed() {
         *path = s.into();
     }
 }
 
-impl Desktop {
-    pub(super) fn edit_rule_link(&mut self, partner: &str, name: &str) {
-        self.navigate(View::Rules);
-        if let Some(p) = self
-            .workspace
-            .partners
-            .iter()
-            .position(|p| p.name == partner)
-        {
-            let mut matches = self.workspace.partners[p]
-                .rules
-                .iter()
-                .enumerate()
-                .filter(|(_, r)| r.name == name);
-            if let Some((i, _)) = matches.next() {
-                if matches.next().is_none() {
-                    self.rule_form = Some(RuleForm::new(&self.workspace, p, Some(i)));
-                    return;
+/// The rules of a case as a table. Returns the rule whose name was clicked.
+pub(super) fn rule_table(ui: &mut Ui, rules: &[Rule]) -> Option<usize> {
+    let mut clicked = None;
+    rule_row(ui, 24., |col, ui| {
+        form::label(ui, ["Order", "Rule", "Message", "Version", "Actions"][col]);
+    });
+    ui.separator();
+    for (i, rule) in rules.iter().enumerate() {
+        ui.push_id(i, |ui| {
+            rule_row(ui, 30., |col, ui| match col {
+                0 => {
+                    ui.label(muted((i + 1).to_string()));
                 }
-                self.status = format!("Several rules are named {name}. Choose the matching rule.");
-                return;
-            }
-        }
-        self.status = format!("The recorded rule {name} is no longer configured for {partner}.");
-    }
-
-    pub(super) fn rules(&mut self, ui: &mut Ui) {
-        ui.set_max_width(ui.available_width().min(820.));
-        header_row(ui, |ui| {
-            ui.heading("Rules");
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if button(ui, "Add rule", true).clicked() {
-                    self.rule_form = Some(RuleForm::new(&self.workspace, self.partner, None));
+                1 => {
+                    if ui.link(&rule.name).on_hover_text(&rule.name).clicked() {
+                        clicked = Some(i);
+                    }
+                }
+                2 => {
+                    ui.monospace(&rule.message).on_hover_text(&rule.message);
+                }
+                3 => {
+                    let version = rule.combined_version().unwrap_or_else(|| "Any".into());
+                    ui.label(muted(&version)).on_hover_text(version);
+                }
+                _ => {
+                    ui.label(rule.actions.len().to_string());
                 }
             });
         });
-        ui.add_space(12.);
-        ScrollArea::vertical().show(ui, |ui| {
-            for (p, partner) in self.workspace.partners.iter().enumerate() {
-                ui.push_id(p, |ui| {
-                    form::card(ui, |ui| {
-                        ui.label(egui::RichText::new(&partner.name).font(bold(15.)));
-                        ui.add_space(4.);
-                        if partner.rules.is_empty() {
-                            ui.label(muted("No rules configured."));
-                            return;
-                        }
-                        rule_row(ui, 24., |col, ui| {
-                            form::label(
-                                ui,
-                                ["Order", "Rule", "Message", "Version", "Actions"][col],
-                            );
-                        });
-                        ui.separator();
-                        for (i, rule) in partner.rules.iter().enumerate() {
-                            rule_row(ui, 30., |col, ui| match col {
-                                0 => {
-                                    ui.label(muted((i + 1).to_string()));
-                                }
-                                1 => {
-                                    if ui.link(&rule.name).on_hover_text(&rule.name).clicked() {
-                                        self.rule_form =
-                                            Some(RuleForm::new(&self.workspace, p, Some(i)));
-                                    }
-                                }
-                                2 => {
-                                    ui.monospace(&rule.message).on_hover_text(&rule.message);
-                                }
-                                3 => {
-                                    let version =
-                                        rule.combined_version().unwrap_or_else(|| "Any".into());
-                                    ui.label(muted(&version)).on_hover_text(version);
-                                }
-                                _ => {
-                                    ui.label(rule.actions.len().to_string());
-                                }
-                            });
-                        }
-                    });
-                });
-                ui.add_space(10.);
-            }
-        });
     }
+    clicked
+}
+
+impl Desktop {
+    /// Opens the rule a recorded execution ran, in the partner's active case.
+    pub(super) fn edit_rule_link(&mut self, partner: &str, name: &str) {
+        let Some(id) = self
+            .workspace
+            .partners
+            .iter()
+            .find(|p| p.name == partner)
+            .and_then(|p| p.case_id())
+            .map(str::to_owned)
+        else {
+            self.status = format!("{partner} has no active case.");
+            return;
+        };
+        self.show_case(&id);
+        let Some(c) = self.workspace.cases.iter().find(|c| c.id == id).cloned() else {
+            return;
+        };
+        let mut matches = c.rules.iter().enumerate().filter(|(_, r)| r.name == name);
+        match (matches.next(), matches.next()) {
+            (Some((i, _)), None) => {
+                self.rule_form = Some(RuleForm::new(&self.root, &c, Some(i)));
+            }
+            (Some(_), Some(_)) => {
+                self.status = format!("Several rules are named {name}. Choose the matching rule.");
+            }
+            _ => {
+                self.status = format!("The recorded rule {name} is no longer in case {id}.");
+            }
+        }
+    }
+
     pub(super) fn rule_dialog(&mut self, ctx: &egui::Context) {
         let Some(mut f) = self.rule_form.take() else {
             return;
@@ -381,15 +344,11 @@ impl Desktop {
         };
         let escaped = form::modal(ctx, "rule editor", title, 510., |ui| {
             if f.removing {
-                ui.label(format!(
-                    "Remove {} from {}?",
-                    self.workspace.partners[f.partner].rules[f.index.unwrap()].name,
-                    self.workspace.partners[f.partner].name
-                ));
+                ui.label(format!("Remove {} from case {}?", f.rule.name, f.case));
             } else {
                 ScrollArea::vertical()
                     .max_height((ctx.content_rect().height() - 220.).max(100.))
-                    .show(ui, |ui| f.fields(ui, &self.workspace));
+                    .show(ui, |ui| f.fields(ui));
             }
             if !f.error.is_empty() {
                 ui.colored_label(AMBER, &f.error);
@@ -440,32 +399,27 @@ impl Desktop {
 mod tests {
     use super::*;
     use crate::gui::tests::click;
+
+    fn rules(dir: &Path) -> Result<Vec<Rule>> {
+        Ok(case::Bundle::read(&case::folder(dir, "confirm-orders"))?
+            .case
+            .rules)
+    }
+
     #[test]
     #[ignore = "opens a local workspace listener"]
-    fn edit_and_reorder_partner_rules() -> Result<()> {
+    fn edit_and_reorder_case_rules() -> Result<()> {
         let dir = tempfile::tempdir()?;
         crate::sample(dir.path())?;
         let file = dir.path().join("vendredi.toml");
-        let mut text = fs::read_to_string(&file)?.replace(":8180", ":0");
-        text.push_str(
-            r#"
-[[partners]]
-name="Freight"
-identity=["FREIGHT","ZZ"]
-charset="UNOC"
-acknowledge="never"
-receive=[{directory="freight",suffix=".edi"}]
-send={directory="freight-out"}
-[[partners.rules]]
-name="Freight updates"
-message="DESADV"
-actions=[{delay_ms=25}]
-"#,
-        );
-        fs::write(file, text)?;
+        fs::write(&file, fs::read_to_string(&file)?.replace(":8180", ":0"))?;
         let ctx = egui::Context::default();
+        ctx.data_mut(|d| {
+            d.insert_temp(egui::Id::new("test screen size"), egui::vec2(1440., 1400.))
+        });
         let mut app = Desktop::open(dir.path().into(), &ctx)?;
-        click(&mut app, &ctx, "Rules")?;
+        click(&mut app, &ctx, "Cases")?;
+        assert_eq!(app.case, "confirm-orders");
         click(&mut app, &ctx, "Add rule")?;
         click(&mut app, &ctx, "Save rule")?;
         assert!(app.rule_form.as_ref().unwrap().error.contains("name"));
@@ -476,49 +430,54 @@ actions=[{delay_ms=25}]
         f.rule.actions = vec![
             Action::Delay { delay_ms: 2 },
             Action::Document {
-                document: "confirmation.edi".into(),
+                document: "../order.edi".into(),
             },
         ];
         click(&mut app, &ctx, "Save rule")?;
-        let w = Workspace::load(dir.path())?;
-        assert_eq!(w.partners[0].rules[0].name, "Audit orders");
-        assert_eq!(w.partners[0].rules[1].name, "Confirm orders");
-        assert_eq!(w.partners[1].rules[0].name, "Freight updates");
+        let error = app.rule_form.as_ref().unwrap().error.clone();
+        assert!(error.contains("inside the case"), "{error}");
+        app.rule_form.as_mut().unwrap().rule.actions[1] = Action::Document {
+            document: "ordrsp.edi".into(),
+        };
+        click(&mut app, &ctx, "Save rule")?;
+        assert!(app.rule_form.is_none());
+        let names: Vec<_> = rules(dir.path())?.into_iter().map(|r| r.name).collect();
+        assert_eq!(names, ["Audit orders", "Orders"]);
+        // The engine runs the edited case right away.
+        assert_eq!(app.workspace.partners[0].scenario()[0].name, "Audit orders");
+        // A recorded execution opens its rule in the active case.
         app.edit_rule_link("Supplier", "Audit orders");
         app.rule_form.as_mut().unwrap().rule.version = Some("D96A".into());
+        app.rule_form.as_mut().unwrap().order = 2;
         click(&mut app, &ctx, "Save rule")?;
-        assert_eq!(
-            app.workspace.partners[0].rules[0].version.as_deref(),
-            Some("D96A")
-        );
-        // A 0.1 rule with a separate release is rewritten in the combined form.
-        let legacy = app.config_source.replacen(
-            "version = \"D96A\"",
-            "version = \"D\"\nrelease = \"96A\"",
-            2,
-        );
-        assert_eq!(legacy.matches("release").count(), 2);
-        app.save_configuration(legacy, None)?;
-        app.edit_rule_link("Supplier", "Confirm orders");
-        assert_eq!(
-            app.rule_form.as_ref().unwrap().rule.version.as_deref(),
-            Some("D96A")
-        );
-        app.rule_form.as_mut().unwrap().rule.name = "Confirm all orders".into();
-        click(&mut app, &ctx, "Save rule")?;
-        let w = Workspace::load(dir.path())?;
-        let edited = &w.partners[0].rules[1];
-        assert_eq!(edited.name, "Confirm all orders");
-        assert_eq!(
-            (edited.version.as_deref(), edited.release.as_deref()),
-            (Some("D96A"), None)
-        );
-        // Rules the editor did not save keep their original spelling.
-        assert_eq!(w.partners[0].rules[0].release.as_deref(), Some("96A"));
+        let saved = rules(dir.path())?;
+        assert_eq!(saved[1].name, "Audit orders");
+        assert_eq!(saved[1].version.as_deref(), Some("D96A"));
         click(&mut app, &ctx, "Audit orders")?;
         click(&mut app, &ctx, "Remove rule")?;
         click(&mut app, &ctx, "Confirm removal")?;
-        assert_eq!(Workspace::load(dir.path())?.partners[0].rules.len(), 1);
+        assert_eq!(rules(dir.path())?.len(), 1);
+        // Imported cases are replaced by the next import, so they are not edited.
+        fs::write(
+            case::folder(dir.path(), "confirm-orders").join(vendredi_core::import::SOURCE_FILE),
+            r#"{"source":"https://example.com/catalog.json"}"#,
+        )?;
+        app.apply_files(&[])?;
+        let c = app
+            .workspace
+            .cases
+            .iter()
+            .find(|c| c.id == "confirm-orders")
+            .unwrap()
+            .clone();
+        let mut f = RuleForm::new(&app.root, &c, Some(0));
+        f.rule.name = "Changed".into();
+        assert!(
+            f.save(&mut app)
+                .unwrap_err()
+                .to_string()
+                .contains("Duplicate it")
+        );
         Ok(())
     }
 }

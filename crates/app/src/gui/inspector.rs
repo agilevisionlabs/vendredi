@@ -68,16 +68,18 @@ impl Desktop {
                         "Partner-initiated send".into(),
                     )
                 }
-                "execution" if !matches!(text(v, "case"), "" | "default") => {
-                    link = Some(Link::Case(text(v, "case").into()));
+                "execution" => {
+                    // The link opens the rule in the partner's active case.
+                    link = Some(Link::Rule(text(v, "name").into()));
+                    let case = text(v, "case");
                     (
                         "Rule matched".into(),
-                        format!("{} in case", text(v, "name")),
+                        if matches!(case, "" | "default") {
+                            String::new()
+                        } else {
+                            format!("in case {case}")
+                        },
                     )
-                }
-                "execution" => {
-                    link = Some(Link::Rule(text(v, "name").into()));
-                    ("Rule matched".into(), String::new())
                 }
                 "outbound" | "resent" => {
                     let Some(id) = v["transfer"].as_i64() else {

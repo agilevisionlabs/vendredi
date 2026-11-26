@@ -9,9 +9,4 @@ charset = "UNOC"
 acknowledge = "always"
 receive = [{ path = "/supplier/orders" }, { directory = "inbox", suffix = ".edi" }]
 send = { url = "http://127.0.0.1:8181/replies" }
-
-[[partners.rules]]
-name = "Confirm orders"
-message = "ORDERS"
-version = "D96A"
-actions = [{ document = "confirmation.edi" }]
+case = "orders"

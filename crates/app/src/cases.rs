@@ -7,59 +7,36 @@ use vendredi_core::{
     import::{self, Change, Incoming},
 };
 
-/// Prints each installed case and the partners it is attached to.
+/// Prints each installed case and the partners it answers.
 pub fn list(dir: &Path) -> Result<()> {
     let w = Workspace::load(dir)?;
-    let own: Vec<_> = w
-        .partners
-        .iter()
-        .map(|p| {
-            if p.case_id() == case::DEFAULT {
-                format!("{} (active)", p.name)
-            } else {
-                p.name.clone()
-            }
-        })
-        .collect();
-    let active = w.partners.iter().any(|p| p.case_id() == case::DEFAULT);
-    println!(
-        "{} {:<28} {:<8} Partner's own rules — {}",
-        if active { "*" } else { " " },
-        case::DEFAULT,
-        "",
-        own.join(", ")
-    );
     for c in &w.cases {
         let partners: Vec<_> = w
             .partners
             .iter()
-            .filter(|p| p.cases.contains(&c.id))
-            .map(|p| {
-                if p.case_id() == c.id {
-                    format!("{} (active)", p.name)
-                } else {
-                    p.name.clone()
-                }
-            })
+            .filter(|p| p.case_id() == Some(c.id.as_str()))
+            .map(|p| p.name.as_str())
             .collect();
-        let active = w.partners.iter().any(|p| p.case_id() == c.id);
         let tags = if c.tags.is_empty() {
             String::new()
         } else {
             format!(" [{}]", c.tags.join(", "))
         };
-        let attached = if partners.is_empty() {
-            "not attached".into()
+        let used = if partners.is_empty() {
+            String::new()
         } else {
-            partners.join(", ")
+            format!(" — active for {}", partners.join(", "))
         };
         println!(
-            "{} {:<28} {:<8} {}{tags} — {attached}",
-            if active { "*" } else { " " },
+            "{} {:<28} {:<8} {}{tags}{used}",
+            if partners.is_empty() { " " } else { "*" },
             c.id,
             c.standard.label(),
             c.name
         );
+    }
+    for p in w.partners.iter().filter(|p| p.case.is_none()) {
+        println!("  {} has no active case and only acknowledges", p.name);
     }
     Ok(())
 }

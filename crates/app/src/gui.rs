@@ -93,7 +93,6 @@ enum View {
     Attention,
     Partner(usize),
     Cases,
-    Rules,
     Scripts,
     Documents,
     Settings,
@@ -146,6 +145,7 @@ struct Desktop {
     /// The case selected in the Cases view.
     case: String,
     import: Option<cases::ImportForm>,
+    case_form: Option<cases::CaseForm>,
     send_file: String,
     function: String,
     config_source: String,
@@ -215,6 +215,7 @@ impl Desktop {
             partner: 0,
             case: String::new(),
             import: None,
+            case_form: None,
             send_file: String::new(),
             function: String::new(),
             edit_file,
@@ -348,7 +349,7 @@ impl Desktop {
             .workspace
             .partners
             .iter()
-            .flat_map(|p| &p.rules)
+            .flat_map(|p| p.scenario())
             .flat_map(|r| &r.actions)
         {
             if let Action::Document { document } = a {
@@ -775,15 +776,18 @@ send = { directory = "freight-out" }
         let dir = tempfile::tempdir()?;
         crate::sample(dir.path())?;
         let path = dir.path().join("vendredi.toml");
+        fs::write(&path, fs::read_to_string(&path)?.replace(":8180", ":0"))?;
+        // The active case runs a second script before its own.
+        let folder = vendredi_core::case::folder(dir.path(), "confirm-orders");
+        let file = folder.join("case.json");
+        let mut case: Value = serde_json::from_slice(&fs::read(&file)?)?;
+        case["rules"][0]["actions"]
+            .as_array_mut()
+            .unwrap()
+            .insert(0, json!({"script":"report.js","function":"report"}));
+        fs::write(&file, serde_json::to_vec(&case)?)?;
         fs::write(
-            &path,
-            fs::read_to_string(&path)?.replace(":8180", ":0").replace(
-                "actions = [",
-                r#"actions = [{script="report.js",function="report"}, "#,
-            ),
-        )?;
-        fs::write(
-            dir.path().join("report.js"),
+            folder.join("report.js"),
             "function report(i,api){api.log('recorded');}",
         )?;
         let ctx = egui::Context::default();
@@ -820,11 +824,11 @@ send = { directory = "freight-out" }
         assert_eq!(app.detail["transfer"], selected);
         app.clear_search();
         assert!(app.search_due.is_none() && app.highlight.is_none());
-        click(&mut app, &ctx, "Confirm orders")?;
-        assert!(app.view == View::Rules && app.rule_form.is_some());
+        click(&mut app, &ctx, "Orders")?;
+        assert!(app.view == View::Cases && app.rule_form.is_some());
         click(&mut app, &ctx, "Cancel")?;
         click(&mut app, &ctx, "All traffic")?;
-        click(&mut app, &ctx, "report.js")?;
+        click(&mut app, &ctx, "cases/confirm-orders/report.js")?;
         assert!(app.view == View::Scripts && app.script_form.is_some());
         frame(
             &mut app,
@@ -839,7 +843,7 @@ send = { directory = "freight-out" }
         );
         assert!(app.script_form.is_none());
         click(&mut app, &ctx, "All traffic")?;
-        click(&mut app, &ctx, "Script log 1")?;
+        click(&mut app, &ctx, "Script log 2")?;
         assert!(matches!(app.detail_tab, DetailTab::Log));
         click(&mut app, &ctx, "Findings 0")?;
         assert!(matches!(app.detail_tab, DetailTab::Findings));
@@ -895,8 +899,10 @@ send = { directory = "freight-out" }
         }
         click(&mut app, &ctx, "→  Send document…")?;
         click(&mut app, &ctx, "JavaScript")?;
-        assert_eq!(app.send_file, "report.js");
-        assert_eq!(app.function, "report");
+        // The choices are the active case's scripts, by workspace path.
+        assert_eq!(app.send_file, "cases/confirm-orders/confirm.js");
+        app.send_file = "cases/confirm-orders/report.js".into();
+        app.function = "report".into();
         click(&mut app, &ctx, "Send")?;
         assert!(!app.send_dialog);
         drop(app);
@@ -910,7 +916,7 @@ send = { directory = "freight-out" }
                 .iter()
                 .filter(|e| e["event"] == "script_log")
                 .count(),
-            2
+            3
         );
         Ok(())
     }
@@ -979,9 +985,9 @@ send = { directory = "freight-out" }
         click(&mut app, &ctx, "Settings")?;
         click(&mut app, &ctx, "Edit configuration file")?;
         // Drive the multiline editor with the same keyboard events as Select All and paste.
-        let changed = app
-            .edit
-            .replace("message = \"ORDERS\"", "message = \"INVOIC\"");
+        // Without an active case the partner only acknowledges.
+        let changed = app.edit.replace("case = \"confirm-orders\"\n", "");
+        assert_ne!(changed, app.edit);
         frame(&mut app, &ctx, vec![]);
         let edit_pos = ctx
             .read_response(egui::Id::new("workspace-file-content"))

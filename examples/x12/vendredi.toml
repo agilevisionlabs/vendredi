@@ -10,9 +10,4 @@ acknowledge = "always"
 receive = [{ path = "/supplier/850" }, { directory = "inbox", suffix = ".x12" }]
 send = { url = "http://127.0.0.1:8181/replies" }
 x12 = { version = "005010", acknowledgement = "997" }
-
-[[partners.rules]]
-name = "Confirm purchase orders"
-message = "850"
-version = "005010"
-actions = [{ document = "855.edi" }]
+case = "orders"

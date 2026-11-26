@@ -103,7 +103,6 @@ impl Desktop {
                     ui.add_space(6.);
                     for (name, view) in [
                         ("Cases", View::Cases),
-                        ("Rules", View::Rules),
                         ("Scripts", View::Scripts),
                         ("Documents", View::Documents),
                         ("Settings", View::Settings),
@@ -128,10 +127,6 @@ impl Desktop {
                     Frame::new()
                         .inner_margin(16)
                         .show(ui, |ui| self.settings(ui));
-                    return;
-                }
-                if self.view == View::Rules {
-                    Frame::new().inner_margin(16).show(ui, |ui| self.rules(ui));
                     return;
                 }
                 if self.view == View::Cases {
@@ -427,6 +422,7 @@ impl Desktop {
         self.script_dialog(ctx);
         self.rule_dialog(ctx);
         self.import_dialog(ctx);
+        self.case_dialog(ctx);
         self.settings_dialog(ctx);
     }
 

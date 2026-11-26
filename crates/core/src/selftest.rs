@@ -94,7 +94,7 @@ fn replies(bundle: &Bundle, e: &case::Expect) -> Result<Vec<String>> {
     fs::write(
         dir.path().join("vendredi.toml"),
         format!(
-            "listen = \"127.0.0.1:0\"\nidentity = {}\nretention_days = 1\n\n[[partners]]\nname = \"Partner\"\nstandard = {:?}\nidentity = {}\ncharset = \"UNOC\"\nacknowledge = \"always\"\nreceive = [{{ path = \"/partner\" }}]\nsend = {{ directory = \"out\" }}\n{x12}cases = [{id:?}]\ncase = {id:?}\n",
+            "listen = \"127.0.0.1:0\"\nidentity = {}\nretention_days = 1\n\n[[partners]]\nname = \"Partner\"\nstandard = {:?}\nidentity = {}\ncharset = \"UNOC\"\nacknowledge = \"always\"\nreceive = [{{ path = \"/partner\" }}]\nsend = {{ directory = \"out\" }}\n{x12}case = {id:?}\n",
             quote(&WORKSPACE_IDENTITY),
             serde_json::to_value(bundle.case.standard)?
                 .as_str()

@@ -1,36 +1,49 @@
 use super::*;
 use egui::{ComboBox, ScrollArea, Ui};
 use form::field;
-use toml_edit::{DocumentMut, Table};
-use workspace_edit::{FileEdit, tables};
+use vendredi_core::case::{self, Case};
+use workspace_edit::FileEdit;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// A script action: which case, rule and action run it.
+#[derive(Clone, PartialEq, Eq)]
 struct Binding {
-    partner: usize,
+    case: String,
     rule: usize,
     action: usize,
 }
 
+/// Edits a script of a case and the rule that runs it. Paths are inside the
+/// case folder.
 pub(super) struct ScriptForm {
     binding: Option<Binding>,
-    partner: usize,
+    case: String,
     rule: Option<usize>,
     new_rule: String,
     message: String,
-    file: String,
-    function: String,
-    source: String,
+    pub(super) file: String,
+    pub(super) function: String,
+    pub(super) source: String,
     original: Option<String>,
-    error: String,
+    pub(super) error: String,
     confirm_detach: bool,
 }
 
+/// Cases whose files the editors may change: imported cases are replaced by
+/// the next import.
+fn editable(w: &Workspace) -> impl Iterator<Item = &Case> {
+    w.cases.iter().filter(|c| c.source.is_none())
+}
+
+fn find<'a>(w: &'a Workspace, id: &str) -> Option<&'a Case> {
+    w.cases.iter().find(|c| c.id == id)
+}
+
 impl ScriptForm {
-    fn new(w: &Workspace, partner: usize) -> Self {
+    fn new(case: &Case) -> Self {
         Self {
             binding: None,
-            partner,
-            rule: (!w.partners[partner].rules.is_empty()).then_some(0),
+            case: case.id.clone(),
+            rule: (!case.rules.is_empty()).then_some(0),
             new_rule: String::new(),
             message: "ORDERS".into(),
             file: String::new(),
@@ -44,8 +57,12 @@ impl ScriptForm {
         }
     }
 
+    fn path(&self, root: &Path) -> PathBuf {
+        case::folder(root, &self.case).join(&self.file)
+    }
+
     fn load(&mut self, root: &Path) -> Result<()> {
-        let text = vendredi_core::script::read_source(root.join(&self.file))
+        let text = vendredi_core::script::read_source(self.path(root))
             .with_context(|| format!("Opening {}", self.file))?;
         self.source.clone_from(&text);
         self.original = Some(text);
@@ -54,17 +71,18 @@ impl ScriptForm {
     }
 
     fn select_rule(&mut self, ui: &mut Ui, w: &Workspace) {
-        ui.label("Partner");
-        let before = self.partner;
-        ComboBox::from_id_salt("script partner")
-            .selected_text(&w.partners[self.partner].name)
+        ui.label("Case");
+        let before = self.case.clone();
+        let name = find(w, &self.case).map_or(self.case.as_str(), |c| &c.name);
+        ComboBox::from_id_salt("script case")
+            .selected_text(name)
             .show_ui(ui, |ui| {
-                for (i, p) in w.partners.iter().enumerate() {
-                    ui.selectable_value(&mut self.partner, i, &p.name);
+                for c in editable(w) {
+                    ui.selectable_value(&mut self.case, c.id.clone(), &c.name);
                 }
             });
-        let rules = &w.partners[self.partner].rules;
-        if before != self.partner {
+        let rules = find(w, &self.case).map_or(&[][..], |c| &c.rules);
+        if before != self.case {
             self.rule = (!rules.is_empty()).then_some(0);
         }
         ui.label("Run when rule matches");
@@ -90,14 +108,13 @@ impl ScriptForm {
         if self.original.is_some() {
             ui.columns(2, |cols| {
                 form::label(&mut cols[0], "Script file");
-                cols[0].monospace(&self.file);
+                cols[0].monospace(format!("cases/{}/{}", self.case, self.file));
                 field(&mut cols[1], "Entry function", &mut self.function);
             });
         } else {
-            let existing: BTreeSet<_> = w
-                .partners
-                .iter()
-                .flat_map(|p| &p.rules)
+            let existing: BTreeSet<_> = find(w, &self.case)
+                .into_iter()
+                .flat_map(|c| &c.rules)
                 .flat_map(|r| &r.actions)
                 .filter_map(|a| match a {
                     Action::Script { script, function } => Some((script, function)),
@@ -106,7 +123,7 @@ impl ScriptForm {
                 .collect();
             if !existing.is_empty() {
                 ComboBox::from_id_salt("reuse script")
-                    .selected_text("Reuse a configured script…")
+                    .selected_text("Reuse a script of this case…")
                     .show_ui(ui, |ui| {
                         for (path, function) in existing {
                             if ui
@@ -126,8 +143,11 @@ impl ScriptForm {
                     });
             }
             field(ui, "Script file", &mut self.file);
-            ui.label(muted("Use a workspace path such as scripts/orders.js."));
-            if w.root.join(&self.file).is_file()
+            ui.label(muted(format!(
+                "A path inside the case folder cases/{}, such as orders.js.",
+                self.case
+            )));
+            if self.path(&w.root).is_file()
                 && ui.button("Load existing script").clicked()
                 && let Err(e) = self.check_new_path().and_then(|()| self.load(&w.root))
             {
@@ -146,12 +166,13 @@ impl ScriptForm {
                 .desired_width(f32::INFINITY),
         );
         if self.binding.is_some() {
-            let name = &w.partners[self.partner].name;
+            let case = find(w, &self.case);
+            let name = case.map_or(self.case.as_str(), |c| &c.name);
             let rule = self
                 .rule
-                .map(|i| w.partners[self.partner].rules[i].name.as_str())
-                .unwrap_or("New rule");
-            egui::CollapsingHeader::new(format!("Run for {name} · {rule}"))
+                .and_then(|i| case.and_then(|c| c.rules.get(i)))
+                .map_or("New rule", |r| r.name.as_str());
+            egui::CollapsingHeader::new(format!("Run in {name} · {rule}"))
                 .id_salt("script binding")
                 .show(ui, |ui| self.select_rule(ui, w));
         }
@@ -162,121 +183,143 @@ impl ScriptForm {
         ensure!(
             path.extension()
                 .is_some_and(|ext| ext.eq_ignore_ascii_case("js"))
-                && path.components().all(|p| matches!(
-                    p,
-                    std::path::Component::Normal(_) | std::path::Component::CurDir
-                )),
-            "Enter a workspace-relative JavaScript file ending in .js."
+                && case::relative(path).is_ok(),
+            "Enter a JavaScript file inside the case folder, ending in .js."
         );
         Ok(())
     }
 
+    /// Reads a case's `case.json` for editing.
+    fn read_case(root: &Path, w: &Workspace, id: &str) -> Result<(PathBuf, Vec<u8>, Case)> {
+        ensure!(
+            find(w, id).is_some_and(|c| c.source.is_none()),
+            "Case {id} was imported. Duplicate it to change its scripts."
+        );
+        let path = case::folder(root, id).join(case::FILE);
+        let bytes = fs::read(&path).with_context(|| path.display().to_string())?;
+        let case = Case::parse(&bytes)?;
+        Ok((path, bytes, case))
+    }
+
     fn update(&self, app: &mut Desktop, detach: bool) -> Result<()> {
-        let mut doc: DocumentMut = app.config_source.parse()?;
-        let partners = tables(doc.as_table_mut(), "partners")?;
         let same_rule = self
             .binding
-            .is_some_and(|b| b.partner == self.partner && Some(b.rule) == self.rule);
-        if let Some(b) = self.binding
+            .as_ref()
+            .is_some_and(|b| b.case == self.case && Some(b.rule) == self.rule);
+        let mut files = Vec::new();
+        // Detaching or moving takes the action out of its old rule first.
+        if let Some(b) = &self.binding
             && (detach || !same_rule)
         {
-            let rules = tables(
-                partners.get_mut(b.partner).context("missing partner")?,
-                "rules",
-            )?;
-            let rule = rules.get_mut(b.rule).context("missing rule")?;
-            let actions = tables(rule, "actions")?;
-            actions.remove(b.action);
-            if actions.is_empty() {
-                rule["actions"] = toml_edit::value(toml_edit::Array::new());
+            let (path, before, mut case) = Self::read_case(&app.root, &app.workspace, &b.case)?;
+            case.rules
+                .get_mut(b.rule)
+                .context("missing rule")?
+                .actions
+                .remove(b.action);
+            files.push((path, Some(before), case::to_json(&case)?.into_bytes()));
+        }
+        if !detach {
+            if self.original.is_none() {
+                self.check_new_path()?;
             }
-        }
-        if detach {
-            return app.save_configuration(doc.to_string(), None);
-        }
-
-        if self.original.is_none() {
-            self.check_new_path()?;
-        }
-        let path = app.root.join(&self.file);
-        if self.original.is_none() {
-            ensure!(
-                !path.exists(),
-                "This file exists. Load the existing script to edit it."
-            );
-        }
-        ensure!(
-            !self.source.trim().is_empty(),
-            "Enter the JavaScript source."
-        );
-        vendredi_core::script::validate(&self.source, &self.function)?;
-        let rules = tables(
-            partners.get_mut(self.partner).context("missing partner")?,
-            "rules",
-        )?;
-        let rule = if let Some(i) = self.rule {
-            rules.get_mut(i).context("missing rule")?
-        } else {
-            ensure!(
-                !self.new_rule.trim().is_empty() && !self.message.trim().is_empty(),
-                "Enter the new rule name and message type."
-            );
-            let mut rule = Table::new();
-            rule["name"] = toml_edit::value(self.new_rule.trim());
-            rule["message"] = toml_edit::value(self.message.trim().to_uppercase());
-            rules.push(rule);
-            rules.get_mut(rules.len() - 1).unwrap()
-        };
-        if let Some(b) = self.binding
-            && same_rule
-        {
-            let action = rule
-                .get_mut("actions")
-                .and_then(|a| a.get_mut(b.action))
-                .context("missing script action")?;
-            if action["function"].as_str() != Some(self.function.as_str()) {
-                action["function"] = toml_edit::value(&self.function);
+            let script = self.path(&app.root);
+            if self.original.is_none() {
+                ensure!(
+                    !script.exists(),
+                    "This file exists. Load the existing script to edit it."
+                );
             }
-        } else {
-            let mut action = Table::new();
-            action["script"] = toml_edit::value(&self.file);
-            action["function"] = toml_edit::value(&self.function);
-            tables(rule, "actions")?.push(action);
+            ensure!(
+                !self.source.trim().is_empty(),
+                "Enter the JavaScript source."
+            );
+            vendredi_core::script::validate(&self.source, &self.function)?;
+            // The case may be the one just edited above.
+            let (path, before, mut case) = match files.pop() {
+                Some((path, before, after))
+                    if self.binding.as_ref().is_some_and(|b| b.case == self.case) =>
+                {
+                    (path, before.unwrap_or_default(), Case::parse(&after)?)
+                }
+                other => {
+                    files.extend(other);
+                    Self::read_case(&app.root, &app.workspace, &self.case)?
+                }
+            };
+            let rule = if let Some(i) = self.rule {
+                case.rules.get_mut(i).context("missing rule")?
+            } else {
+                ensure!(
+                    !self.new_rule.trim().is_empty() && !self.message.trim().is_empty(),
+                    "Enter the new rule name and message type."
+                );
+                case.rules.push(vendredi_core::config::Rule {
+                    name: self.new_rule.trim().into(),
+                    message: self.message.trim().to_uppercase(),
+                    version: None,
+                    release: None,
+                    actions: vec![],
+                });
+                case.rules.last_mut().unwrap()
+            };
+            match &self.binding {
+                Some(b) if same_rule => {
+                    let Some(Action::Script { function, .. }) = rule.actions.get_mut(b.action)
+                    else {
+                        anyhow::bail!("missing script action");
+                    };
+                    function.clone_from(&self.function);
+                }
+                _ => rule.actions.push(Action::Script {
+                    script: self.file.clone().into(),
+                    function: self.function.clone(),
+                }),
+            }
+            files.push((path, Some(before), case::to_json(&case)?.into_bytes()));
+            files.push((
+                script,
+                self.original.clone().map(String::into_bytes),
+                self.source.clone().into_bytes(),
+            ));
         }
-        app.save_configuration(
-            doc.to_string(),
-            Some(FileEdit {
-                path: &path,
-                before: self.original.as_ref().map(|s| s.as_bytes()),
-                after: self.source.as_bytes(),
-            }),
-        )
+        let edits: Vec<_> = files
+            .iter()
+            .map(|(path, before, after)| FileEdit {
+                path,
+                before: before.as_deref(),
+                after,
+            })
+            .collect();
+        app.apply_files(&edits)
     }
 }
 
 impl Desktop {
     fn edit_binding(&mut self, binding: Binding) {
-        let Binding {
-            partner,
-            rule,
-            action,
-        } = binding;
-        let Action::Script { script, function } =
-            &self.workspace.partners[partner].rules[rule].actions[action]
+        let Some(c) = find(&self.workspace, &binding.case).cloned() else {
+            return;
+        };
+        let Some(Action::Script { script, function }) = c
+            .rules
+            .get(binding.rule)
+            .and_then(|r| r.actions.get(binding.action))
         else {
             return;
         };
-        let mut f = ScriptForm::new(&self.workspace, partner);
-        f.binding = Some(binding);
-        f.rule = Some(rule);
+        let mut f = ScriptForm::new(&c);
+        f.rule = Some(binding.rule);
         f.file = script.display().to_string();
         f.function.clone_from(function);
+        f.binding = Some(binding);
         match f.load(&self.root) {
             Ok(()) => self.script_form = Some(f),
             Err(e) => self.status = format!("{e:#}"),
         }
     }
 
+    /// Opens the script a recorded execution ran. The recorded path is
+    /// inside the partner's active case.
     pub(super) fn edit_script_link(
         &mut self,
         path: &Path,
@@ -284,45 +327,45 @@ impl Desktop {
         rule_name: Option<&str>,
     ) {
         self.navigate(View::Scripts);
-        let mut found = None;
-        for (partner, p) in self
+        let Some(c) = self
             .workspace
             .partners
             .iter()
+            .find(|p| p.name == partner_name)
+            .and_then(|p| p.case_id())
+            .and_then(|id| find(&self.workspace, id))
+        else {
+            self.status = format!("{partner_name} has no active case");
+            return;
+        };
+        let folder = Path::new(case::DIRECTORY).join(&c.id);
+        let path = path.strip_prefix(&folder).unwrap_or(path);
+        let mut found = Vec::new();
+        for (rule, r) in c
+            .rules
+            .iter()
             .enumerate()
-            .filter(|(_, p)| p.name == partner_name)
+            .filter(|(_, r)| rule_name.is_none_or(|n| r.name == n))
         {
-            for (rule, r) in p
-                .rules
-                .iter()
-                .enumerate()
-                .filter(|(_, r)| rule_name.is_none_or(|n| r.name == n))
-            {
-                for (action, _) in r
-                    .actions
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, a)| matches!(a,Action::Script{script,..} if script==path))
-                {
-                    if found.is_some() {
-                        self.status = "Choose the script entry function to edit.".into();
-                        return;
-                    }
-                    found = Some(Binding {
-                        partner,
+            for (action, a) in r.actions.iter().enumerate() {
+                if matches!(a, Action::Script { script, .. } if script == path) {
+                    found.push(Binding {
+                        case: c.id.clone(),
                         rule,
                         action,
                     });
                 }
             }
         }
-        if let Some(b) = found {
-            self.edit_binding(b);
-        } else {
-            self.status = format!(
-                "{} has no current binding for this execution",
-                path.display()
-            );
+        match found.len() {
+            1 => self.edit_binding(found.pop().unwrap()),
+            0 => {
+                self.status = format!(
+                    "{} has no current binding for this execution",
+                    path.display()
+                );
+            }
+            _ => self.status = "Choose the script entry function to edit.".into(),
         }
     }
 
@@ -330,30 +373,48 @@ impl Desktop {
         header_row(ui, |ui| {
             ui.heading("Scripts");
             if button(ui, "Add script", true).clicked() {
-                self.script_form = Some(ScriptForm::new(&self.workspace, self.partner));
+                let active = self.workspace.partners[self.partner].case_id();
+                let target = active
+                    .and_then(|id| editable(&self.workspace).find(|c| c.id == id))
+                    .or_else(|| editable(&self.workspace).next())
+                    .cloned();
+                match target {
+                    Some(c) => self.script_form = Some(ScriptForm::new(&c)),
+                    None => {
+                        self.status =
+                            "Create or duplicate a case first: scripts belong to cases.".into();
+                    }
+                }
             }
         });
+        ui.add_space(4.);
+        ui.label(muted(
+            "Scripts belong to cases and run when one of the case's rules matches.",
+        ));
         ui.add_space(8.);
         let mut picked = None;
         ScrollArea::vertical().show(ui, |ui| {
             let mut any = false;
-            for (partner, p) in self.workspace.partners.iter().enumerate() {
+            for c in &self.workspace.cases {
                 let mut first = true;
-                for (rule, r) in p.rules.iter().enumerate() {
+                for (rule, r) in c.rules.iter().enumerate() {
                     for (action, a) in r.actions.iter().enumerate() {
                         let Action::Script { script, function } = a else {
                             continue;
                         };
                         if first {
-                            ui.label(egui::RichText::new(&p.name).font(bold(15.)));
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new(&c.name).font(bold(15.)));
+                                ui.label(muted(&c.id).monospace());
+                            });
                             first = false;
                             any = true;
                         }
-                        ui.push_id((partner, rule, action), |ui| {
+                        ui.push_id((&c.id, rule, action), |ui| {
                             ui.horizontal_wrapped(|ui| {
                                 if ui.link(script.display().to_string()).clicked() {
                                     picked = Some(Binding {
-                                        partner,
+                                        case: c.id.clone(),
                                         rule,
                                         action,
                                     });
@@ -370,7 +431,7 @@ impl Desktop {
             }
             if !any {
                 ui.label(muted(
-                    "No scripts configured. Add a script to run when a partner rule matches.",
+                    "No scripts yet. Add a script to run when a rule of a case matches.",
                 ));
             }
         });
@@ -394,7 +455,7 @@ impl Desktop {
         let escaped = form::modal(ctx, "script editor", title, 640., |ui| {
             if f.confirm_detach {
                 ui.label(format!(
-                    "Remove {} from this rule? The JavaScript file stays in the workspace.",
+                    "Remove {} from this rule? The JavaScript file stays in the case folder.",
                     f.file
                 ));
             } else {
@@ -469,7 +530,14 @@ mod tests {
         click(&mut app, &ctx, "Save script")?;
         assert!(!app.script_form.as_ref().unwrap().error.is_empty());
         assert_eq!(fs::read_to_string(&config)?, baseline);
-        let script = dir.path().join("scripts/orders.js");
+        let script = case::folder(dir.path(), "confirm-orders").join("scripts/orders.js");
+        let rules = || -> Result<Vec<vendredi_core::config::Rule>> {
+            Ok(
+                case::Bundle::read(&case::folder(dir.path(), "confirm-orders"))?
+                    .case
+                    .rules,
+            )
+        };
         assert!(!script.exists());
         let f = app.script_form.as_mut().unwrap();
         f.source = "function onMessage(i, api) { api.log('order arrived'); }".into();
@@ -479,9 +547,8 @@ mod tests {
             "save failed: {:?}",
             app.script_form.as_ref().map(|f| &f.error)
         );
-        let w = Workspace::load(dir.path())?;
         assert!(
-            matches!(w.partners[0].rules[0].actions.as_slice(),[Action::Document{..},Action::Script{function,..}] if function=="onMessage")
+            matches!(rules()?[0].actions.as_slice(),[Action::Script{..},Action::Script{function,..}] if function=="onMessage")
         );
 
         fs::rename(
@@ -504,10 +571,10 @@ mod tests {
         f.function = "onInvoice".into();
         f.source = "function onInvoice(i, api) { api.log('invoice arrived'); }".into();
         click(&mut app, &ctx, "Save script")?;
-        let w = Workspace::load(dir.path())?;
-        assert_eq!(w.partners[0].rules[0].actions.len(), 1);
+        let saved = rules()?;
+        assert_eq!(saved[0].actions.len(), 1);
         assert!(
-            matches!(w.partners[0].rules[1].actions.as_slice(),[Action::Script{function,..}] if function=="onInvoice")
+            matches!(saved[1].actions.as_slice(),[Action::Script{function,..}] if function=="onInvoice")
         );
         click(&mut app, &ctx, "scripts/orders.js")?;
         let edited = "function onInvoice() { /* external change */ }";
@@ -523,11 +590,7 @@ mod tests {
         assert_eq!(fs::read_to_string(&script)?, edited);
         click(&mut app, &ctx, "Detach from rule")?;
         click(&mut app, &ctx, "Confirm detach")?;
-        assert!(
-            Workspace::load(dir.path())?.partners[0].rules[1]
-                .actions
-                .is_empty()
-        );
+        assert!(rules()?[1].actions.is_empty());
         assert_eq!(fs::read_to_string(script)?, edited);
         Ok(())
     }

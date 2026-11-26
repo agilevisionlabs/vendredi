@@ -1,0 +1,19 @@
+{
+  "vendredi_case": 1,
+  "id": "orders",
+  "name": "Confirm purchase orders",
+  "description": "Confirms each 850 purchase order with a fixed 855.",
+  "standard": "x12",
+  "rules": [
+    {
+      "name": "Confirm purchase orders",
+      "message": "850",
+      "version": "005010",
+      "actions": [
+        {
+          "document": "855.edi"
+        }
+      ]
+    }
+  ]
+}

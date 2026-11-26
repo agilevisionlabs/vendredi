@@ -27,8 +27,7 @@ impl PartnerForm {
                 separators: None,
                 edifact: None,
                 x12: None,
-                rules: vec![],
-                cases: vec![],
+                legacy_rules: None,
                 case: None,
                 active: None,
                 receive: vec![Receive::Folder {
@@ -89,6 +88,15 @@ impl PartnerForm {
                 }
             }
         }
+        // A case written for the other standard cannot stay active.
+        if p.active.as_ref().is_some_and(|a| {
+            app.workspace
+                .cases
+                .iter()
+                .any(|c| c.id == a.id && c.standard != p.standard)
+        }) {
+            p.case = None;
+        }
         ensure!(!p.receive.is_empty(), "Add at least one intake channel.");
         for channel in &p.receive {
             if let Receive::Folder { directory, .. } = channel {
@@ -114,7 +122,6 @@ impl PartnerForm {
             }
         }
         let mut data = toml_edit::ser::to_document(p)?.into_table();
-        data.remove("rules");
         if p.standard == Standard::X12 || p.edifact.is_some() {
             data.remove("charset");
             data.remove("separators");
@@ -132,7 +139,14 @@ impl PartnerForm {
                 }
             }
             // Settings of the other standard no longer apply.
-            for key in ["separators", "x12", "standard", "charset", "edifact"] {
+            for key in [
+                "separators",
+                "x12",
+                "standard",
+                "charset",
+                "edifact",
+                "case",
+            ] {
                 if !present.iter().any(|k| k == key) {
                     table.remove(key);
                 }
@@ -465,7 +479,9 @@ impl Desktop {
         let mut close = false;
         let escaped = form::modal(ctx, "remove partner", "Remove partner?", 400., |ui| {
             let name = &self.workspace.partners[removal.index].name;
-            ui.label(format!("Remove {name} and its rules from this workspace?"));
+            ui.label(format!(
+                "Remove {name} from this workspace? Its cases stay installed."
+            ));
             if !removal.error.is_empty() {
                 ui.colored_label(AMBER, &removal.error);
             }
@@ -599,7 +615,7 @@ mod tests {
         click(&mut app, &ctx, "Save partner")?;
         let w = Workspace::load(dir.path())?;
         assert_eq!(w.partners[0].name, "Supplier East");
-        assert_eq!(w.partners[0].rules[0].name, "Confirm orders");
+        assert_eq!(w.partners[0].case_id(), Some("confirm-orders"));
         assert!(fs::read_to_string(&config)?.starts_with("# keep this comment"));
         click(&mut app, &ctx, "Remove partner")?;
         assert!(app.partner_form.is_none());

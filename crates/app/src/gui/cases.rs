@@ -5,6 +5,7 @@ use vendredi_core::{
     case::{self, Case},
     import::{self, Change, Incoming},
 };
+use workspace_edit::FileEdit;
 
 type Preview = std::result::Result<(Vec<Incoming>, Vec<Change>), String>;
 
@@ -157,29 +158,6 @@ fn case_frame(fill: egui::Color32, stroke: egui::Color32) -> egui::Frame {
         .inner_margin(egui::Margin::symmetric(16, 12))
 }
 
-/// One row per rule: name, the message it matches and its action count.
-fn rule_list(ui: &mut Ui, rules: &[vendredi_core::config::Rule]) {
-    if rules.is_empty() {
-        return;
-    }
-    egui::Grid::new(ui.next_auto_id())
-        .num_columns(3)
-        .spacing([24., 6.])
-        .show(ui, |ui| {
-            for r in rules {
-                let version = r.combined_version().unwrap_or_else(|| "any version".into());
-                ui.label(&r.name);
-                ui.label(muted(format!("{} {version}", r.message)).monospace());
-                let n = r.actions.len();
-                ui.label(muted(format!(
-                    "{n} action{}",
-                    if n == 1 { "" } else { "s" }
-                )));
-                ui.end_row();
-            }
-        });
-}
-
 /// The first line of a card: a fixed height, so titles of different sizes
 /// in the two columns share a centre line.
 fn title_row(ui: &mut Ui, contents: impl FnOnce(&mut Ui)) {
@@ -189,6 +167,12 @@ fn title_row(ui: &mut Ui, contents: impl FnOnce(&mut Ui)) {
         egui::Layout::left_to_right(egui::Align::Center),
         contents,
     );
+}
+
+/// The New case and Delete case dialogs.
+pub(super) enum CaseForm {
+    New { name: String, error: String },
+    Delete { id: String, error: String },
 }
 
 impl Desktop {
@@ -209,11 +193,7 @@ impl Desktop {
                 self.config_source = source;
                 self.workspace = workspace;
                 self.partner = self.partner.min(self.workspace.partners.len() - 1);
-                self.status = if to == case::DEFAULT {
-                    format!("{partner} now uses its own rules")
-                } else {
-                    format!("{partner} now uses case {to}")
-                };
+                self.status = format!("{partner} now uses case {to}");
             }
             (Err(e), _) => self.status = format!("Reloading the workspace: {e:#}"),
             (_, Err(e)) => self.status = format!("Reading vendredi.toml: {e:#}"),
@@ -227,6 +207,16 @@ impl Desktop {
         }
     }
 
+    /// The partners whose active case this is.
+    fn users(&self, id: &str) -> Vec<String> {
+        self.workspace
+            .partners
+            .iter()
+            .filter(|p| p.case_id() == Some(id))
+            .map(|p| p.name.clone())
+            .collect()
+    }
+
     pub(super) fn cases(&mut self, ui: &mut Ui) {
         // The page uses the whole pane: the header, the list and the detail
         // card share its left and right edges.
@@ -235,35 +225,55 @@ impl Desktop {
             ui.add_space(20.);
             form::label(ui, "Partner");
             // A button of the row's height opens the partner menu, so the
-            // picker matches Import cases… in size and centre line.
+            // picker matches the other buttons in size and centre line.
             let current = self.workspace.partners[self.partner].name.clone();
             let picker = button(ui, &format!("{current}  ⏷"), false);
             egui::Popup::menu(&picker).show(|ui| {
                 for (i, p) in self.workspace.partners.iter().enumerate() {
                     if ui.selectable_label(i == self.partner, &p.name).clicked() {
                         self.partner = i;
+                        self.case.clear();
                     }
                 }
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if button(ui, "Import cases…", true)
+                if button(ui, "Import cases…", false)
                     .on_hover_text("Import cases from a folder, a JSON file or an https:// URL")
                     .clicked()
                 {
                     self.open_import();
                 }
+                if button(ui, "New case", true).clicked() {
+                    self.case_form = Some(CaseForm::New {
+                        name: String::new(),
+                        error: String::new(),
+                    });
+                }
             });
         });
         ui.add_space(6.);
         ui.label(muted(
-            "A case is a prepared partner scenario, such as confirming, rejecting or never answering an order. \
-             The active case answers the partner's traffic; without one, the partner's own rules do.",
+            "A case is a partner scenario: the rules that answer its messages, with samples to try them. \
+             The active case answers the partner's traffic.",
         ));
         ui.add_space(10.);
         let partner = &self.workspace.partners[self.partner];
-        let active = partner.case_id().to_owned();
-        if self.case.is_empty() {
-            self.case = active.clone();
+        let active = partner.case_id().map(str::to_owned);
+        if active.is_none() {
+            notice(
+                ui,
+                &format!(
+                    "{} has no active case, so it only acknowledges what it receives. Make a case active to answer its messages.",
+                    partner.name
+                ),
+            );
+            ui.add_space(10.);
+        }
+        if self.case.is_empty() || !self.workspace.cases.iter().any(|c| c.id == self.case) {
+            self.case = active
+                .clone()
+                .or_else(|| self.workspace.cases.first().map(|c| c.id.clone()))
+                .unwrap_or_default();
         }
         let width = ui.available_width();
         let list = (width * 0.36).clamp(260., 400.);
@@ -272,16 +282,9 @@ impl Desktop {
             ui.allocate_ui_with_layout(egui::vec2(list, ui.available_height()), top_down, |ui| {
                 ScrollArea::vertical().id_salt("case list").show(ui, |ui| {
                     ui.set_width(list);
-                    self.case_row(
-                        ui,
-                        case::DEFAULT,
-                        "Partner's own rules",
-                        &[],
-                        active == case::DEFAULT,
-                    );
                     let cases = self.workspace.cases.clone();
                     for c in &cases {
-                        self.case_row(ui, &c.id, &c.name, &c.tags, active == c.id);
+                        self.case_row(ui, c, active.as_deref() == Some(c.id.as_str()));
                     }
                     if cases.is_empty() {
                         self.no_cases(ui);
@@ -289,21 +292,20 @@ impl Desktop {
                 });
             });
             ui.add_space(12.);
-            ui.vertical(|ui| {
-                let selected = self
-                    .workspace
-                    .cases
-                    .iter()
-                    .find(|c| c.id == self.case)
-                    .cloned();
-                case_frame(PANEL, LINE).show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    match &selected {
-                        Some(c) => self.case_detail(ui, c, active == c.id),
-                        None => self.default_case_detail(ui, active == case::DEFAULT),
-                    }
+            let selected = self
+                .workspace
+                .cases
+                .iter()
+                .find(|c| c.id == self.case)
+                .cloned();
+            if let Some(c) = selected {
+                ui.vertical(|ui| {
+                    case_frame(PANEL, LINE).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        self.case_detail(ui, &c, active.as_deref() == Some(c.id.as_str()));
+                    });
                 });
-            });
+            }
         });
     }
 
@@ -315,16 +317,15 @@ impl Desktop {
         });
     }
 
-    /// The empty list: what cases are for and the two ways to get some.
+    /// The empty list: what cases are for and the ways to get some.
     fn no_cases(&mut self, ui: &mut Ui) {
-        ui.add_space(8.);
         case_frame(BG, LINE).show(ui, |ui| {
             ui.set_width(ui.available_width());
             title_row(ui, |ui| {
                 ui.label(RichText::new("No cases installed").font(bold(13.)));
             });
             ui.label(muted(
-                "Install the starter set of common scenarios, or import cases your team keeps in a folder or repository.",
+                "Install the starter set of common scenarios, import cases your team keeps in a folder or repository, or start a new one.",
             ));
             ui.add_space(8.);
             ui.horizontal(|ui| {
@@ -352,8 +353,8 @@ impl Desktop {
         };
     }
 
-    fn case_row(&mut self, ui: &mut Ui, id: &str, name: &str, tags: &[String], active: bool) {
-        let selected = self.case == id;
+    fn case_row(&mut self, ui: &mut Ui, c: &Case, active: bool) {
+        let selected = self.case == c.id;
         let frame = case_frame(
             if selected { SURFACE } else { BG },
             if selected { BLUE } else { LINE },
@@ -361,8 +362,8 @@ impl Desktop {
         frame.show(ui, |ui| {
             ui.set_width(ui.available_width());
             title_row(ui, |ui| {
-                if ui.link(RichText::new(name).font(bold(13.))).clicked() {
-                    self.case = id.into();
+                if ui.link(RichText::new(&c.name).font(bold(13.))).clicked() {
+                    self.case = c.id.clone();
                 }
                 if active {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -371,12 +372,11 @@ impl Desktop {
                 }
             });
             ui.horizontal_wrapped(|ui| {
-                if id == case::DEFAULT {
-                    ui.label(muted("Built in · the rules set up on the Rules page").size(11.));
-                } else {
-                    ui.label(muted(id).monospace().size(11.));
+                ui.label(muted(&c.id).monospace().size(11.));
+                if c.standard != self.workspace.partners[self.partner].standard {
+                    ui.label(muted(c.standard.label()).size(11.));
                 }
-                for tag in tags {
+                for tag in &c.tags {
                     ui.label(muted(format!("#{tag}")).size(11.));
                 }
             });
@@ -392,7 +392,8 @@ impl Desktop {
         } else if ui
             .add_enabled(
                 compatible,
-                egui::Button::new("Make active").min_size(egui::vec2(0., 36.)),
+                egui::Button::new(format!("Make active for {partner}"))
+                    .min_size(egui::vec2(0., 36.)),
             )
             .on_disabled_hover_text("This case is written for another EDI standard.")
             .clicked()
@@ -401,33 +402,24 @@ impl Desktop {
         }
     }
 
-    fn default_case_detail(&mut self, ui: &mut Ui, active: bool) {
-        let p = &self.workspace.partners[self.partner];
-        let name = p.name.clone();
-        let rules = p.rules.clone();
-        title_row(ui, |ui| {
-            ui.label(RichText::new("Partner's own rules").font(bold(17.)));
-            badge(ui, "Built in", SECONDARY_TEXT, SURFACE, false);
-        });
-        ui.label(muted(format!(
-            "The rules you set up for {name} on the Rules page. They answer {name} whenever no case is active. \
-             Making a case active swaps in its rules and leaves these untouched."
-        )));
-        ui.add_space(8.);
-        form::label(ui, "Rules");
-        if rules.is_empty() {
-            ui.label(muted(format!("{name} has no rules yet.")));
+    fn duplicate_case(&mut self, c: &Case) {
+        let result = (|| -> Result<String> {
+            let mut bundle = case::Bundle::read(&case::folder(&self.root, &c.id))?;
+            let name = format!("{} (copy)", c.name);
+            let id = case::unused_id(&self.root, &name);
+            bundle.case.id.clone_from(&id);
+            bundle.case.name = name;
+            bundle.write(&case::folder(&self.root, &id))?;
+            self.apply_files(&[])?;
+            Ok(id)
+        })();
+        match result {
+            Ok(id) => {
+                self.status = format!("Copied {} to {id}", c.id);
+                self.case = id;
+            }
+            Err(e) => self.status = format!("Copying {}: {e:#}", c.id),
         }
-        rule_list(ui, &rules);
-        ui.add_space(8.);
-        header_row(ui, |ui| {
-            self.activate_button(ui, case::DEFAULT, active, true);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if button(ui, "Edit rules", false).clicked() {
-                    self.navigate(View::Rules);
-                }
-            });
-        });
     }
 
     fn case_detail(&mut self, ui: &mut Ui, c: &Case, active: bool) {
@@ -437,22 +429,71 @@ impl Desktop {
         title_row(ui, |ui| {
             ui.label(RichText::new(&c.name).font(bold(17.)));
             badge(ui, c.standard.label(), SECONDARY_TEXT, SURFACE, true);
+            if let Some(source) = &c.source {
+                ui.label(muted("Imported").size(12.))
+                    .on_hover_text(format!("Imported from {source}"));
+            }
         });
         ui.label(muted(&c.id).monospace());
         if !c.description.is_empty() {
             ui.add_space(4.);
             ui.label(&c.description);
         }
-        ui.add_space(8.);
-        form::label(ui, "Rules");
-        rule_list(ui, &c.rules);
+        ui.add_space(10.);
+        header_row(ui, |ui| {
+            self.activate_button(ui, &c.id, active, compatible);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let users = self.users(&c.id);
+                if ui
+                    .add_enabled(users.is_empty(), form::removal_button("Delete"))
+                    .on_disabled_hover_text(format!(
+                        "Active for {}. Make another case active first.",
+                        users.join(", ")
+                    ))
+                    .clicked()
+                {
+                    self.case_form = Some(CaseForm::Delete {
+                        id: c.id.clone(),
+                        error: String::new(),
+                    });
+                }
+                if button(ui, "Duplicate", false)
+                    .on_hover_text("Copy this case, with its files, to change it")
+                    .clicked()
+                {
+                    self.duplicate_case(c);
+                }
+            });
+        });
+        ui.add_space(12.);
+        header_row(ui, |ui| {
+            form::label(ui, "Rules");
+            ui.label(muted("The first rule that matches a message runs."));
+            if c.source.is_none() {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if button(ui, "Add rule", false).clicked() {
+                        self.rule_form = Some(rules::RuleForm::new(&self.root, c, None));
+                    }
+                });
+            }
+        });
+        if let Some(source) = &c.source {
+            ui.label(muted(format!(
+                "Imported from {source}. Importing it again replaces it, so duplicate it to make changes."
+            )));
+            ui.add_space(4.);
+        }
+        if c.rules.is_empty() {
+            ui.label(muted("No rules yet: messages are only acknowledged."));
+        } else if let Some(i) = rules::rule_table(ui, &c.rules) {
+            self.rule_form = Some(rules::RuleForm::new(&self.root, c, Some(i)));
+        }
         if let Some(policy) = c.acknowledge {
+            ui.add_space(4.);
             ui.label(muted(format!("Acknowledgement: {policy:?}").to_lowercase()));
         }
-        ui.add_space(8.);
-        header_row(ui, |ui| self.activate_button(ui, &c.id, active, compatible));
         if !c.samples.is_empty() || !c.initiate.is_empty() {
-            ui.add_space(8.);
+            ui.add_space(12.);
             form::label(
                 ui,
                 if active {
@@ -487,6 +528,103 @@ impl Desktop {
             });
         }
     }
+
+    fn create_case(&mut self, name: &str) -> Result<String> {
+        let name = name.trim();
+        ensure!(!name.is_empty(), "Enter a case name.");
+        let id = case::unused_id(&self.root, name);
+        let standard = self.workspace.partners[self.partner].standard;
+        let json = case::to_json(&case::empty(&id, name, standard))?;
+        let path = case::folder(&self.root, &id).join(case::FILE);
+        self.apply_files(&[FileEdit {
+            path: &path,
+            before: None,
+            after: json.as_bytes(),
+        }])?;
+        Ok(id)
+    }
+
+    fn delete_case(&mut self, id: &str) -> Result<()> {
+        let users = self.users(id);
+        ensure!(
+            users.is_empty(),
+            "{id} is active for {}. Make another case active first.",
+            users.join(", ")
+        );
+        fs::remove_dir_all(case::folder(&self.root, id))?;
+        self.apply_files(&[])
+    }
+
+    pub(super) fn case_dialog(&mut self, ctx: &egui::Context) {
+        let Some(mut f) = self.case_form.take() else {
+            return;
+        };
+        let mut close = false;
+        let title = match &f {
+            CaseForm::New { .. } => "New case",
+            CaseForm::Delete { .. } => "Delete case?",
+        };
+        let escaped = form::modal(ctx, "case editor", title, 480., |ui| match &mut f {
+            CaseForm::New { name, error } => {
+                let standard = self.workspace.partners[self.partner].standard;
+                ui.label(muted(format!(
+                    "An empty {} case. Add rules to it once it exists.",
+                    standard.label()
+                )));
+                form::input(ui, "Name", name, "Northline Supply orders");
+                if !name.trim().is_empty() {
+                    ui.label(muted(format!(
+                        "Folder: cases/{}",
+                        case::unused_id(&self.root, name)
+                    )));
+                }
+                if !error.is_empty() {
+                    ui.colored_label(AMBER, error.as_str());
+                }
+                form::footer(ui, |ui| {
+                    if button(ui, "Create case", true).clicked() {
+                        match self.create_case(name) {
+                            Ok(id) => {
+                                self.status = format!("Created case {id}");
+                                self.case = id;
+                                close = true;
+                            }
+                            Err(e) => *error = format!("{e:#}"),
+                        }
+                    }
+                    if button(ui, "Cancel", false).clicked() {
+                        close = true;
+                    }
+                });
+            }
+            CaseForm::Delete { id, error } => {
+                ui.label(format!(
+                    "Delete cases/{id} with its rules, documents and scripts? This cannot be undone."
+                ));
+                if !error.is_empty() {
+                    ui.colored_label(AMBER, error.as_str());
+                }
+                form::footer(ui, |ui| {
+                    if ui.add(form::removal_button("Delete case")).clicked() {
+                        match self.delete_case(id) {
+                            Ok(()) => {
+                                self.status = format!("Deleted case {id}");
+                                self.case.clear();
+                                close = true;
+                            }
+                            Err(e) => *error = format!("{e:#}"),
+                        }
+                    }
+                    if button(ui, "Cancel", false).clicked() {
+                        close = true;
+                    }
+                });
+            }
+        });
+        if !close && !escaped {
+            self.case_form = Some(f);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -494,28 +632,34 @@ mod tests {
     use super::*;
     use crate::gui::tests::{click, wait_for};
 
+    fn open(dir: &Path) -> Result<(Desktop, egui::Context)> {
+        crate::sample(dir)?;
+        let file = dir.join("vendredi.toml");
+        fs::write(&file, fs::read_to_string(&file)?.replace(":8180", ":0"))?;
+        let ctx = egui::Context::default();
+        ctx.data_mut(|d| {
+            d.insert_temp(egui::Id::new("test screen size"), egui::vec2(1440., 1400.))
+        });
+        Ok((Desktop::open(dir.into(), &ctx)?, ctx))
+    }
+
     #[test]
     #[ignore = "opens a local workspace listener"]
     fn switch_cases_and_send_samples() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        crate::sample(dir.path())?;
         let file = dir.path().join("vendredi.toml");
-        fs::write(&file, fs::read_to_string(&file)?.replace(":8180", ":0"))?;
-        let ctx = egui::Context::default();
-        ctx.data_mut(|d| {
-            d.insert_temp(egui::Id::new("test screen size"), egui::vec2(1440., 1200.))
-        });
-        let mut app = Desktop::open(dir.path().into(), &ctx)?;
+        let (mut app, ctx) = open(dir.path())?;
         click(&mut app, &ctx, "Cases")?;
+        assert_eq!(app.case, "confirm-orders");
         // The partner picker opens a menu of partners.
         click(&mut app, &ctx, "Supplier  ⏷")?;
         click(&mut app, &ctx, "Supplier")?;
         assert_eq!(app.partner, 0);
         click(&mut app, &ctx, "Reject every order")?;
         assert_eq!(app.case, "reject-orders");
-        click(&mut app, &ctx, "Make active")?;
+        click(&mut app, &ctx, "Make active for Supplier")?;
         wait_for(&mut app, "case switch", |a| {
-            a.workspace.partners[0].case_id() == "reject-orders"
+            a.workspace.partners[0].case_id() == Some("reject-orders")
         })?;
         assert!(app.config_source.contains("case = \"reject-orders\""));
         click(&mut app, &ctx, "Send sample Order")?;
@@ -524,22 +668,75 @@ mod tests {
                 .values()
                 .any(|t| t.outgoing && t.status == "Delivered")
         })?;
-        // A saved rule edit starts from the configuration the engine wrote.
         click(&mut app, &ctx, "Send an invoice")?;
-        click(&mut app, &ctx, "Make active")?;
+        click(&mut app, &ctx, "Make active for Supplier")?;
         wait_for(&mut app, "second switch", |a| {
-            a.workspace.partners[0].case_id() == "send-invoice"
+            a.workspace.partners[0].case_id() == Some("send-invoice")
         })?;
         click(&mut app, &ctx, "Partner sends Invoice")?;
         wait_for(&mut app, "invoice", |a| {
             a.transfers.values().any(|t| t.kind == "INVOIC")
         })?;
-        click(&mut app, &ctx, "Partner's own rules")?;
-        click(&mut app, &ctx, "Make active")?;
-        wait_for(&mut app, "default case", |a| {
-            a.workspace.partners[0].case_id() == case::DEFAULT
-        })?;
-        assert!(!fs::read_to_string(&file)?.contains("\ncase ="));
+        assert!(fs::read_to_string(&file)?.contains("case = \"send-invoice\""));
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "opens a local workspace listener"]
+    fn create_duplicate_and_delete_cases() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let (mut app, ctx) = open(dir.path())?;
+        click(&mut app, &ctx, "Cases")?;
+        click(&mut app, &ctx, "New case")?;
+        click(&mut app, &ctx, "Create case")?;
+        assert!(
+            matches!(&app.case_form, Some(CaseForm::New { error, .. }) if error.contains("name"))
+        );
+        if let Some(CaseForm::New { name, .. }) = &mut app.case_form {
+            *name = "Northline Supply".into();
+        }
+        click(&mut app, &ctx, "Create case")?;
+        assert!(app.case_form.is_none());
+        assert_eq!(app.case, "northline-supply");
+        let created = app
+            .workspace
+            .cases
+            .iter()
+            .find(|c| c.id == "northline-supply")
+            .unwrap();
+        assert!(created.rules.is_empty() && created.source.is_none());
+        // The active case cannot be deleted; a copy of it can.
+        click(&mut app, &ctx, "Confirm every order")?;
+        click(&mut app, &ctx, "Duplicate")?;
+        assert_eq!(app.case, "confirm-every-order-copy");
+        let copy = case::folder(dir.path(), "confirm-every-order-copy");
+        assert!(copy.join("confirm.js").is_file());
+        assert_eq!(
+            app.workspace
+                .cases
+                .iter()
+                .find(|c| c.id == "confirm-every-order-copy")
+                .unwrap()
+                .name,
+            "Confirm every order (copy)"
+        );
+        click(&mut app, &ctx, "Delete")?;
+        click(&mut app, &ctx, "Delete case")?;
+        assert!(app.case_form.is_none());
+        assert!(!copy.exists());
+        assert!(
+            app.workspace
+                .cases
+                .iter()
+                .all(|c| c.id != "confirm-every-order-copy")
+        );
+        click(&mut app, &ctx, "Confirm every order")?;
+        assert!(
+            app.delete_case("confirm-orders")
+                .unwrap_err()
+                .to_string()
+                .contains("active for Supplier")
+        );
         Ok(())
     }
 
@@ -549,11 +746,10 @@ mod tests {
         let dir = tempfile::tempdir()?;
         crate::sample(dir.path())?;
         let file = dir.path().join("vendredi.toml");
-        let config = fs::read_to_string(&file)?.replace(":8180", ":0");
-        // A workspace from before cases: no cases/ folder, none attached.
-        let start = config.find("cases = [").unwrap();
-        let end = start + config[start..].find(']').unwrap() + 1;
-        fs::write(&file, format!("{}{}", &config[..start], &config[end..]))?;
+        let config = fs::read_to_string(&file)?
+            .replace(":8180", ":0")
+            .replace("case = \"confirm-orders\"\n", "");
+        fs::write(&file, config)?;
         fs::remove_dir_all(dir.path().join(case::DIRECTORY))?;
         let ctx = egui::Context::default();
         ctx.data_mut(|d| {
@@ -561,6 +757,7 @@ mod tests {
         });
         let mut app = Desktop::open(dir.path().into(), &ctx)?;
         assert!(app.workspace.cases.is_empty());
+        assert_eq!(app.workspace.partners[0].case_id(), None);
         click(&mut app, &ctx, "Cases")?;
         click(&mut app, &ctx, "Install starter cases")?;
         assert_eq!(app.status, "Installed 13 starter cases");

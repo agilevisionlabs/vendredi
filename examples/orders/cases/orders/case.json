@@ -1,0 +1,19 @@
+{
+  "vendredi_case": 1,
+  "id": "orders",
+  "name": "Confirm orders",
+  "description": "Confirms each ORDERS message with a fixed ORDRSP.",
+  "standard": "edifact",
+  "rules": [
+    {
+      "name": "Confirm orders",
+      "message": "ORDERS",
+      "version": "D96A",
+      "actions": [
+        {
+          "document": "confirmation.edi"
+        }
+      ]
+    }
+  ]
+}

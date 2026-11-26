@@ -18,8 +18,6 @@ pub const FORMAT: u32 = 1;
 pub const FILE: &str = "case.json";
 /// The workspace folder that holds one subfolder per case.
 pub const DIRECTORY: &str = "cases";
-/// The pseudo case that stands for a partner's own rules.
-pub const DEFAULT: &str = "default";
 
 /// The largest file a case may contain.
 pub const FILE_LIMIT: usize = 1024 * 1024;
@@ -79,6 +77,10 @@ pub struct Case {
     /// Import writes them next to `case.json` and removes this map.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub files: BTreeMap<String, String>,
+    /// Where an installed case was imported from. Imported cases are
+    /// replaced by the next import, so editors copy them first.
+    #[serde(skip)]
+    pub source: Option<String>,
 }
 
 /// A case together with the contents of every file it references.
@@ -91,7 +93,6 @@ pub struct Bundle {
 pub fn valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 64
-        && id != DEFAULT
         && id.bytes().next().is_some_and(|c| c.is_ascii_alphanumeric())
         && id
             .bytes()
@@ -327,9 +328,7 @@ impl Bundle {
             }
             fs::write(target, bytes)?;
         }
-        let mut json = serde_json::to_string_pretty(&self.case)?;
-        json.push('\n');
-        fs::write(dir.join(FILE), json)?;
+        fs::write(dir.join(FILE), to_json(&self.case)?)?;
         Ok(())
     }
 }
@@ -342,6 +341,65 @@ fn read_limited(path: &Path) -> Result<Vec<u8>> {
         .read_to_end(&mut bytes)?;
     ensure!(bytes.len() <= FILE_LIMIT, "file exceeds {FILE_LIMIT} bytes");
     Ok(bytes)
+}
+
+/// The folder of an installed case.
+pub fn folder(root: &Path, id: &str) -> PathBuf {
+    root.join(DIRECTORY).join(id)
+}
+
+/// A case with no rules yet.
+pub fn empty(id: &str, name: &str, standard: Standard) -> Case {
+    Case {
+        vendredi_case: FORMAT,
+        id: id.into(),
+        name: name.into(),
+        description: String::new(),
+        standard,
+        tags: vec![],
+        acknowledge: None,
+        rules: vec![],
+        samples: vec![],
+        initiate: vec![],
+        expect: vec![],
+        files: BTreeMap::new(),
+        source: None,
+    }
+}
+
+/// An id derived from a name, such as `northline-supply`, that no installed
+/// case uses yet.
+pub fn unused_id(root: &Path, name: &str) -> String {
+    let mut base = String::new();
+    for c in name.chars().flat_map(char::to_lowercase) {
+        if c.is_ascii_alphanumeric() {
+            base.push(c);
+        } else if !base.is_empty() && !base.ends_with('-') {
+            base.push('-');
+        }
+    }
+    base.truncate(56);
+    let base = match base.trim_end_matches('-') {
+        "" => "case".to_owned(),
+        b => b.to_owned(),
+    };
+    (1..)
+        .map(|n| {
+            if n == 1 {
+                base.clone()
+            } else {
+                format!("{base}-{n}")
+            }
+        })
+        .find(|id| !folder(root, id).exists())
+        .unwrap()
+}
+
+/// The `case.json` text editors write.
+pub fn to_json(case: &Case) -> Result<String> {
+    let mut json = serde_json::to_string_pretty(case)?;
+    json.push('\n');
+    Ok(json)
 }
 
 /// Loads every case folder under `cases/` in a workspace.
@@ -368,7 +426,12 @@ pub fn library(root: &Path) -> Result<Vec<Case>> {
                 bundle.case.id
             );
         }
-        cases.push(bundle.case);
+        let mut case = bundle.case;
+        case.source = fs::read(folder.join(crate::import::SOURCE_FILE))
+            .ok()
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            .and_then(|v| v["source"].as_str().map(str::to_owned));
+        cases.push(case);
     }
     Ok(cases)
 }
@@ -436,11 +499,27 @@ mod tests {
     }
 
     #[test]
+    fn unused_ids_follow_the_name() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        assert_eq!(
+            unused_id(dir.path(), "Northline Supply!"),
+            "northline-supply"
+        );
+        fs::create_dir_all(folder(dir.path(), "northline-supply"))?;
+        assert_eq!(
+            unused_id(dir.path(), "Northline Supply"),
+            "northline-supply-2"
+        );
+        assert_eq!(unused_id(dir.path(), "  "), "case");
+        assert!(valid_id(&unused_id(dir.path(), &"x".repeat(100))));
+        Ok(())
+    }
+
+    #[test]
     fn invalid_cases_name_the_problem() {
         for (extra, message) in [
             (json!({"vendredi_case": 2}), "vendredi_case"),
             (json!({"id": "Bad Id"}), "invalid case id"),
-            (json!({"id": "default"}), "invalid case id"),
             (json!({"standard": "tradacoms"}), "invalid case"),
             (json!({"unknown": true}), "unknown"),
             (

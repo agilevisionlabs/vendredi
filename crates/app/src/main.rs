@@ -16,7 +16,8 @@ use vendredi_core::{case, config::Workspace};
 
 const CONFIG: &str = include_str!("../../../examples/orders/vendredi.toml");
 const ORDER: &[u8] = include_bytes!("../../../examples/orders/order.edi");
-const CONFIRMATION: &[u8] = include_bytes!("../../../examples/orders/confirmation.edi");
+const CONFIRMATION: &[u8] =
+    include_bytes!("../../../examples/orders/cases/orders/confirmation.edi");
 /// The starter case library, installed and attached to the sample partner.
 const CASES: &[&str] = &[
     include_str!("../../../examples/cases/confirm-orders.json"),
@@ -55,17 +56,14 @@ fn install_starter_cases(root: &Path) -> Result<(Vec<case::Case>, usize)> {
 
 fn sample(root: &Path) -> Result<()> {
     std::fs::create_dir_all(root)?;
-    // The sample partner exchanges EDIFACT; X12 cases stay installed for X12 partners.
-    let ids: Vec<_> = install_starter_cases(root)?
-        .0
-        .iter()
-        .filter(|c| c.standard == vendredi_core::config::Standard::Edifact)
-        .map(|c| format!("{:?}", c.id))
-        .collect();
-    let config = CONFIG.replace(
-        "url = \"http://127.0.0.1:8181/replies\" }",
-        &format!("directory = \"replies\" }}\ncases = [{}]", ids.join(", ")),
-    );
+    install_starter_cases(root)?;
+    // The sample partner starts with the starter case that confirms orders.
+    let config = CONFIG
+        .replace(
+            "url = \"http://127.0.0.1:8181/replies\" }",
+            "directory = \"replies\" }",
+        )
+        .replace("case = \"orders\"", "case = \"confirm-orders\"");
     for (name, data) in [
         ("vendredi.toml", config.as_bytes()),
         ("order.edi", ORDER),
