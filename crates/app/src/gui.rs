@@ -10,6 +10,7 @@ mod scripts;
 mod search;
 mod send;
 mod settings;
+mod shortcuts;
 mod theme;
 mod window;
 mod workspace_edit;
@@ -202,6 +203,8 @@ struct Desktop {
     case: String,
     import: Option<cases::ImportForm>,
     case_form: Option<cases::CaseForm>,
+    /// Set by ⌘F; the search field takes the keyboard when it is next drawn.
+    focus_search: bool,
     send_file: String,
     function: String,
     config_source: String,
@@ -272,6 +275,7 @@ impl Desktop {
             case: String::new(),
             import: None,
             case_form: None,
+            focus_search: false,
             send_file: String::new(),
             function: String::new(),
             edit_file,
@@ -522,19 +526,23 @@ impl Desktop {
                 ui.monospace("vendredi.toml");
             }
             if ui
-                .add_enabled(dirty, egui::Button::new("Save and reload"))
+                .add_enabled(dirty, styled("Save and reload", true, BUTTON))
+                .on_hover_text(shortcuts::hint(ui.ctx(), "Save", &shortcuts::SAVE))
                 .clicked()
                 && let Err(e) = self.save()
             {
                 self.file_error = Some(format!("{e:#}"));
             }
-            if ui
-                .button(if dirty {
+            if button(
+                ui,
+                if dirty {
                     "Discard edits"
                 } else {
                     "Reload file"
-                })
-                .clicked()
+                },
+                false,
+            )
+            .clicked()
             {
                 self.open_file(self.edit_file.clone());
             }
@@ -576,7 +584,11 @@ mod tests {
         net::TcpListener,
         time::{Duration, Instant},
     };
-    fn frame(app: &mut Desktop, ctx: &egui::Context, events: Vec<Event>) -> egui::FullOutput {
+    pub(in crate::gui) fn frame(
+        app: &mut Desktop,
+        ctx: &egui::Context,
+        events: Vec<Event>,
+    ) -> egui::FullOutput {
         render(ctx, events, |ctx| app.show(ctx))
     }
     pub(in crate::gui) fn render(

@@ -4,6 +4,7 @@ impl Desktop {
     pub(super) fn show(&mut self, ctx: &egui::Context) {
         self.dispatch_search(ctx);
         self.drain();
+        self.shortcuts(ctx);
         let count = self.transfers.values().filter(|t| self.visible(t)).count();
         let attention = self.transfers.values().filter(|t| t.attention).count();
         TopBottomPanel::bottom("footer")
@@ -223,6 +224,7 @@ impl Desktop {
                 v.widgets.active.corner_radius = 6.into();
                 ui.add(
                     TextEdit::singleline(&mut self.search)
+                        .id(Id::new(shortcuts::SEARCH_ID))
                         .hint_text(RichText::new("Search traffic and message text").color(MUTED))
                         .margin(Margin {
                             left: 30,
@@ -242,7 +244,12 @@ impl Desktop {
                 [c + vec2(3., 3.), c + vec2(6., 6.)],
                 Stroke::new(1.4_f32, MUTED),
             );
-            if field.inner.changed() {
+            let tip = shortcuts::hint(ui.ctx(), "Search traffic", &shortcuts::SEARCH);
+            let field = field.inner.on_hover_text(tip);
+            if std::mem::take(&mut self.focus_search) {
+                field.request_focus();
+            }
+            if field.changed() {
                 self.edit_search(ui.ctx());
             }
             filter(
@@ -508,7 +515,11 @@ impl Desktop {
                 }
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if button(ui, "→  Send document…", true).clicked() {
+                let tip = shortcuts::hint(ui.ctx(), "Send a document or script", &shortcuts::SEND);
+                if button(ui, "→  Send document…", true)
+                    .on_hover_text(tip)
+                    .clicked()
+                {
                     self.open_send();
                 }
                 let toggle = if self.listening {

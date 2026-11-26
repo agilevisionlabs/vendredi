@@ -222,7 +222,8 @@ impl Desktop {
                 {
                     self.open_import();
                 }
-                if button(ui, "New case", true).clicked() {
+                let tip = shortcuts::hint(ui.ctx(), "Start an empty case", &shortcuts::NEW);
+                if button(ui, "New case", true).on_hover_text(tip).clicked() {
                     self.case_form = Some(CaseForm::New {
                         name: String::new(),
                         error: String::new(),
