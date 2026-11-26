@@ -165,6 +165,7 @@ impl Desktop {
                     })
                     .show(ui, |ui| self.traffic_header(ui));
                 ui.separator();
+                self.getting_started(ui);
                 let r = ui.available_rect_before_wrap();
                 if r.width() < 880. && r.height() < 485. {
                     if self.compact_detail && self.selected.is_some() {

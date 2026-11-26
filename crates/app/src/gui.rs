@@ -7,6 +7,7 @@ mod inspector;
 mod layout_tests;
 #[cfg(target_os = "macos")]
 mod menu;
+mod onboarding;
 mod partners;
 mod rules;
 mod scripts;
@@ -184,6 +185,7 @@ struct Desktop {
     arrivals: BTreeMap<i64, f64>,
     /// A workspace change the session carries out after this frame.
     pub(super) switch: Option<session::Switch>,
+    checklist: onboarding::Checklist,
     send_file: String,
     function: String,
     config_source: String,
@@ -194,6 +196,7 @@ struct Desktop {
 }
 impl Desktop {
     fn open(root: PathBuf, ctx: &egui::Context) -> Result<Self> {
+        let checklist = onboarding::Checklist::load(&root);
         install(ctx);
         let workspace = Workspace::load(&root)?;
         let (tx, events) = mpsc::channel();
@@ -262,6 +265,7 @@ impl Desktop {
             toast_count: 0,
             arrivals: BTreeMap::new(),
             switch: None,
+            checklist,
             send_file: String::new(),
             function: String::new(),
             edit_file,
@@ -277,6 +281,7 @@ impl Desktop {
         }
     }
     fn select(&mut self, id: i64) {
+        self.checklist_saw_selection(id);
         self.selected = Some(id);
         self.reveal_match = true;
         self.segment = 0;
@@ -336,7 +341,10 @@ impl Desktop {
                     }
                 }
                 "error" => self.fail(v["error"].as_str().unwrap_or("Command failed")),
-                "case_switched" => self.case_switched(&v),
+                "case_switched" => {
+                    self.checklist_saw_switch();
+                    self.case_switched(&v);
+                }
                 "import_ready" => self.poll_import(),
                 _ => {
                     refresh = true;
