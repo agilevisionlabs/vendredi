@@ -19,7 +19,7 @@ impl Desktop {
                         "{count} transfer{} shown",
                         if count == 1 { "" } else { "s" }
                     )));
-                    ui.add_space(8.);
+                    ui.add_space(GAP_S);
                     ui.label(
                         RichText::new(format!("{attention} need attention"))
                             .size(12.)
@@ -53,9 +53,9 @@ impl Desktop {
                 ScrollArea::vertical().show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 2.;
                     self.workspace_title(ui);
-                    ui.add_space(16.);
+                    ui.add_space(GAP_L);
                     section(ui, "  TRAFFIC");
-                    ui.add_space(6.);
+                    ui.add_space(GAP_S);
                     if nav(ui, "All traffic", "", self.view == View::All, false) {
                         self.navigate(View::All);
                     }
@@ -71,9 +71,9 @@ impl Desktop {
                     if nav(ui, "Clear history…", "", false, false) {
                         self.open_cleanup();
                     }
-                    ui.add_space(18.);
+                    ui.add_space(GAP_XL);
                     section(ui, "  PARTNERS");
-                    ui.add_space(6.);
+                    ui.add_space(GAP_S);
                     for p in 0..self.workspace.partners.len() {
                         let partner = &self.workspace.partners[p];
                         let kind = match partner.receive.first() {
@@ -94,13 +94,13 @@ impl Desktop {
                             }
                         }
                     }
-                    ui.add_space(4.);
+                    ui.add_space(GAP_XS);
                     if add_partner_button(ui) {
                         self.open_partner(None);
                     }
-                    ui.add_space(18.);
+                    ui.add_space(GAP_XL);
                     section(ui, "  WORKSPACE");
-                    ui.add_space(6.);
+                    ui.add_space(GAP_S);
                     for (name, view) in [
                         ("Cases", View::Cases),
                         ("Scripts", View::Scripts),
@@ -125,28 +125,32 @@ impl Desktop {
             .show(ctx, |ui| {
                 if self.view == View::Settings {
                     Frame::new()
-                        .inner_margin(16)
+                        .inner_margin(PAGE_MARGIN)
                         .show(ui, |ui| self.settings(ui));
                     return;
                 }
                 if self.view == View::Cases {
-                    Frame::new().inner_margin(16).show(ui, |ui| self.cases(ui));
+                    Frame::new()
+                        .inner_margin(PAGE_MARGIN)
+                        .show(ui, |ui| self.cases(ui));
                     return;
                 }
                 if self.view == View::Scripts {
                     Frame::new()
-                        .inner_margin(16)
+                        .inner_margin(PAGE_MARGIN)
                         .show(ui, |ui| self.scripts(ui));
                     return;
                 }
                 if !matches!(self.view, View::All | View::Attention | View::Partner(_)) {
-                    Frame::new().inner_margin(16).show(ui, |ui| self.editor(ui));
+                    Frame::new()
+                        .inner_margin(PAGE_MARGIN)
+                        .show(ui, |ui| self.editor(ui));
                     return;
                 }
                 Frame::new()
                     .inner_margin(Margin {
-                        left: 16,
-                        right: 16,
+                        left: PAGE_MARGIN,
+                        right: PAGE_MARGIN,
                         top: 12,
                         bottom: 8,
                     })
@@ -208,39 +212,39 @@ impl Desktop {
             ui.spacing_mut().item_spacing.x = 8.;
             ui.spacing_mut().interact_size.y = 35.;
             let width = (ui.available_width() - 218.).max(80.);
-            Frame::new()
-                .fill(PANEL)
-                .stroke(Stroke::new(1.0_f32, EDGE))
-                .corner_radius(6)
-                .inner_margin(Margin::symmetric(8, 0))
-                .show(ui, |ui| {
-                    ui.horizontal_centered(|ui| {
-                        ui.set_width(width - 16.);
-                        ui.set_height(34.);
-                        let (icon, _) = ui.allocate_exact_size(vec2(14., 14.), Sense::hover());
-                        let c = icon.center() - vec2(1., 1.);
-                        ui.painter()
-                            .circle_stroke(c, 4., Stroke::new(1.4_f32, MUTED));
-                        ui.painter().line_segment(
-                            [c + vec2(3., 3.), c + vec2(6., 6.)],
-                            Stroke::new(1.4_f32, MUTED),
-                        );
-                        if ui
-                            .add(
-                                TextEdit::singleline(&mut self.search)
-                                    .frame(false)
-                                    .hint_text(
-                                        RichText::new("Search traffic and message text")
-                                            .color(MUTED),
-                                    )
-                                    .desired_width(ui.available_width()),
-                            )
-                            .changed()
-                        {
-                            self.edit_search(ui.ctx());
-                        }
-                    });
-                });
+            // The search field is one control, as tall as the filter buttons,
+            // with the magnifier painted inside its left margin.
+            let field = ui.scope(|ui| {
+                let v = ui.visuals_mut();
+                v.extreme_bg_color = PANEL;
+                v.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, EDGE);
+                v.widgets.inactive.corner_radius = 6.into();
+                v.widgets.hovered.corner_radius = 6.into();
+                v.widgets.active.corner_radius = 6.into();
+                ui.add(
+                    TextEdit::singleline(&mut self.search)
+                        .hint_text(RichText::new("Search traffic and message text").color(MUTED))
+                        .margin(Margin {
+                            left: 30,
+                            right: 8,
+                            top: 0,
+                            bottom: 0,
+                        })
+                        .desired_width(width)
+                        .min_size(vec2(width, BUTTON))
+                        .vertical_align(Align::Center),
+                )
+            });
+            let c = field.inner.rect.left_center() + vec2(15., -1.);
+            ui.painter()
+                .circle_stroke(c, 4., Stroke::new(1.4_f32, MUTED));
+            ui.painter().line_segment(
+                [c + vec2(3., 3.), c + vec2(6., 6.)],
+                Stroke::new(1.4_f32, MUTED),
+            );
+            if field.inner.changed() {
+                self.edit_search(ui.ctx());
+            }
             filter(
                 ui,
                 "Direction",
@@ -434,7 +438,7 @@ impl Desktop {
             .map(|p| format!("~/{}", p.display()))
             .unwrap_or_else(|| path.clone());
         ui.horizontal(|ui| {
-            ui.add_space(8.);
+            ui.add_space(GAP_S);
             ui.vertical(|ui| {
                 ui.label(RichText::new("Vendredi").font(bold(15.)));
                 ui.add(Label::new(muted(short).monospace().size(11.)).truncate())
@@ -453,7 +457,7 @@ impl Desktop {
         };
         header_row(ui, |ui| {
             ui.heading(title);
-            ui.add_space(10.);
+            ui.add_space(GAP_M);
             let folders = self
                 .workspace
                 .partners
@@ -490,7 +494,7 @@ impl Desktop {
                 .response
                 .on_hover_text(detail);
             if let View::Partner(i) = self.view {
-                ui.add_space(10.);
+                ui.add_space(GAP_M);
                 if button(ui, "Edit partner", false).clicked() {
                     self.open_partner(Some(i));
                 }

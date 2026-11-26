@@ -26,7 +26,7 @@ pub(super) fn modal(
             ui.visuals_mut().widgets.hovered.bg_stroke.color = BLUE;
             ui.visuals_mut().widgets.active.bg_stroke.color = BLUE;
             ui.label(RichText::new(title).font(bold(22.)));
-            ui.add_space(4.);
+            ui.add_space(GAP_XS);
             contents(ui);
         });
     response.is_top_modal
@@ -48,7 +48,7 @@ pub(super) fn input(ui: &mut Ui, caption: &str, value: &mut String, hint: &str) 
                 .background_color(BG)
                 .margin(Margin::symmetric(10, 7))
                 .desired_width(f32::INFINITY)
-                .min_size(vec2(0., 33.)),
+                .min_size(vec2(0., BUTTON)),
         )
         .labelled_by(name.id)
     })
@@ -60,15 +60,10 @@ pub(super) fn field(ui: &mut Ui, caption: &str, value: &mut String) {
 }
 
 pub(super) fn card(ui: &mut Ui, contents: impl FnOnce(&mut Ui)) {
-    Frame::new()
-        .fill(PANEL)
-        .stroke(Stroke::new(1_f32, LINE))
-        .corner_radius(8)
-        .inner_margin(Margin::same(14))
-        .show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            contents(ui);
-        });
+    card_frame(PANEL, LINE).show(ui, |ui| {
+        ui.set_min_width(ui.available_width());
+        contents(ui);
+    });
 }
 
 pub(super) fn footer(ui: &mut Ui, contents: impl FnOnce(&mut Ui)) {

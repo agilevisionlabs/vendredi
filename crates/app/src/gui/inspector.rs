@@ -236,7 +236,7 @@ impl Desktop {
             section(&mut timeline_ui, "WHAT HAPPENED");
         }
         if expanded {
-            timeline_ui.add_space(6.);
+            timeline_ui.add_space(GAP_S);
             ScrollArea::vertical()
                 .id_salt("steps")
                 .show(&mut timeline_ui, |ui| {
@@ -442,7 +442,7 @@ impl Desktop {
         ScrollArea::both()
             .auto_shrink([false, false])
             .show(&mut body, |ui| {
-                ui.add_space(10.);
+                ui.add_space(GAP_M);
                 let widest = segments
                     .iter()
                     .filter_map(|s| s["raw"].as_str())

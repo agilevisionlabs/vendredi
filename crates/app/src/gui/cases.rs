@@ -148,37 +148,6 @@ impl Desktop {
     }
 }
 
-/// Shared by the case list and the detail card, so both columns have the
-/// same border, corners and inner padding.
-fn case_frame(fill: egui::Color32, stroke: egui::Color32) -> egui::Frame {
-    egui::Frame::new()
-        .fill(fill)
-        .stroke(egui::Stroke::new(1_f32, stroke))
-        .corner_radius(8)
-        .inner_margin(egui::Margin::symmetric(16, 12))
-}
-
-/// The heading line of a card section, as tall as its small buttons.
-fn section_row(ui: &mut Ui, contents: impl FnOnce(&mut Ui)) {
-    let size = egui::vec2(ui.available_width(), SMALL_BUTTON);
-    ui.allocate_ui_with_layout(
-        size,
-        egui::Layout::left_to_right(egui::Align::Center),
-        contents,
-    );
-}
-
-/// The first line of a card: a fixed height, so titles of different sizes
-/// in the two columns share a centre line.
-fn title_row(ui: &mut Ui, contents: impl FnOnce(&mut Ui)) {
-    let size = egui::vec2(ui.available_width(), 24.);
-    ui.allocate_ui_with_layout(
-        size,
-        egui::Layout::left_to_right(egui::Align::Center),
-        contents,
-    );
-}
-
 /// The New case and Delete case dialogs.
 pub(super) enum CaseForm {
     New { name: String, error: String },
@@ -232,7 +201,7 @@ impl Desktop {
         // card share its left and right edges.
         header_row(ui, |ui| {
             ui.heading("Cases");
-            ui.add_space(20.);
+            ui.add_space(GAP_XL);
             form::label(ui, "Partner");
             // A button of the row's height opens the partner menu, so the
             // picker matches the other buttons in size and centre line.
@@ -261,12 +230,12 @@ impl Desktop {
                 }
             });
         });
-        ui.add_space(6.);
+        ui.add_space(GAP_S);
         ui.label(muted(
             "A case is a partner scenario: the rules that answer its messages, with samples to try them. \
              The active case answers the partner's traffic.",
         ));
-        ui.add_space(10.);
+        ui.add_space(GAP_M);
         let partner = &self.workspace.partners[self.partner];
         let active = partner.case_id().map(str::to_owned);
         if active.is_none() {
@@ -277,7 +246,7 @@ impl Desktop {
                     partner.name
                 ),
             );
-            ui.add_space(10.);
+            ui.add_space(GAP_M);
         }
         if self.case.is_empty() || !self.workspace.cases.iter().any(|c| c.id == self.case) {
             self.case = active
@@ -301,7 +270,7 @@ impl Desktop {
                     }
                 });
             });
-            ui.add_space(12.);
+            ui.add_space(GAP_M);
             let selected = self
                 .workspace
                 .cases
@@ -310,7 +279,7 @@ impl Desktop {
                 .cloned();
             if let Some(c) = selected {
                 ui.vertical(|ui| {
-                    case_frame(PANEL, LINE).show(ui, |ui| {
+                    card_frame(PANEL, LINE).show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         self.case_detail(ui, &c, active.as_deref() == Some(c.id.as_str()));
                     });
@@ -329,7 +298,7 @@ impl Desktop {
 
     /// The empty list: what cases are for and the ways to get some.
     fn no_cases(&mut self, ui: &mut Ui) {
-        case_frame(BG, LINE).show(ui, |ui| {
+        card_frame(BG, LINE).show(ui, |ui| {
             ui.set_width(ui.available_width());
             title_row(ui, |ui| {
                 ui.label(RichText::new("No cases installed").font(bold(13.)));
@@ -337,7 +306,7 @@ impl Desktop {
             ui.label(muted(
                 "Install the starter set of common scenarios, import cases your team keeps in a folder or repository, or start a new one.",
             ));
-            ui.add_space(8.);
+            ui.add_space(GAP_S);
             ui.horizontal(|ui| {
                 if button(ui, "Install starter cases", true).clicked() {
                     self.install_starter_cases();
@@ -365,7 +334,7 @@ impl Desktop {
 
     fn case_row(&mut self, ui: &mut Ui, c: &Case, active: bool) {
         let selected = self.case == c.id;
-        let frame = case_frame(
+        let frame = card_frame(
             if selected { SURFACE } else { BG },
             if selected { BLUE } else { LINE },
         );
@@ -391,7 +360,7 @@ impl Desktop {
                 }
             });
         });
-        ui.add_space(4.);
+        ui.add_space(GAP_XS);
     }
 
     fn activate_button(&mut self, ui: &mut Ui, id: &str, active: bool, compatible: bool) {
@@ -445,10 +414,10 @@ impl Desktop {
         });
         ui.label(muted(&c.id).monospace());
         if !c.description.is_empty() {
-            ui.add_space(4.);
+            ui.add_space(GAP_XS);
             ui.label(&c.description);
         }
-        ui.add_space(10.);
+        ui.add_space(GAP_M);
         header_row(ui, |ui| {
             self.activate_button(ui, &c.id, active, compatible);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -474,9 +443,9 @@ impl Desktop {
                 }
             });
         });
-        ui.add_space(12.);
+        ui.add_space(GAP_M);
         ui.separator();
-        ui.add_space(8.);
+        ui.add_space(GAP_S);
         section_row(ui, |ui| {
             form::label(ui, "Rules");
             ui.label(muted("The first rule that matches a message runs."));
@@ -492,7 +461,7 @@ impl Desktop {
             ui.label(muted(format!(
                 "Imported from {source}. Importing it again replaces it, so duplicate it to make changes."
             )));
-            ui.add_space(4.);
+            ui.add_space(GAP_XS);
         }
         if c.rules.is_empty() {
             ui.label(muted("No rules yet: messages are only acknowledged."));
@@ -500,13 +469,13 @@ impl Desktop {
             self.rule_form = Some(rules::RuleForm::new(&self.root, c, Some(i)));
         }
         if let Some(policy) = c.acknowledge {
-            ui.add_space(4.);
+            ui.add_space(GAP_XS);
             ui.label(muted(format!("Acknowledgement: {policy:?}").to_lowercase()));
         }
         if !c.samples.is_empty() || !c.initiate.is_empty() {
-            ui.add_space(12.);
+            ui.add_space(GAP_M);
             ui.separator();
-            ui.add_space(8.);
+            ui.add_space(GAP_S);
             section_row(ui, |ui| {
                 form::label(ui, "Try it");
                 if !active {

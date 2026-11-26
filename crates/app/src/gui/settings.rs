@@ -12,7 +12,7 @@ pub(super) struct SettingsForm {
 impl Desktop {
     pub(super) fn settings(&mut self, ui: &mut Ui) {
         ui.heading("Workspace settings");
-        ui.add_space(8.);
+        ui.add_space(GAP_S);
         ScrollArea::vertical().show(ui, |ui| {
             ui.set_max_width(580.);
             form::card(ui, |ui| {

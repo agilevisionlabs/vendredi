@@ -200,9 +200,38 @@ pub(super) fn line(ui: &Ui, a: Pos2, b: Pos2) {
         .line_segment([a, b], Stroke::new(1.0_f32, LINE));
 }
 pub(super) use vendredi_core::engine::local_time as time;
-/// A view's title row. Its fixed height matches `button`, so headings,
-/// labels and buttons share one centre line instead of stepping down by
-/// widget height.
+/// The spacing scale. Views use these instead of literal gaps.
+pub(super) const GAP_XS: f32 = 4.;
+pub(super) const GAP_S: f32 = 8.;
+pub(super) const GAP_M: f32 = 12.;
+pub(super) const GAP_L: f32 = 16.;
+pub(super) const GAP_XL: f32 = 24.;
+/// The inset of every page and card.
+pub(super) const PAGE_MARGIN: i8 = 16;
+
+/// The frame of every card: the same border, corners and padding, so cards
+/// side by side line up.
+pub(super) fn card_frame(fill: Color32, stroke: Color32) -> Frame {
+    Frame::new()
+        .fill(fill)
+        .stroke(Stroke::new(1_f32, stroke))
+        .corner_radius(8)
+        .inner_margin(Margin::symmetric(16, 12))
+}
+
+/// The first line of a card: a fixed height, so titles of different sizes
+/// in neighbouring cards share a centre line.
+pub(super) fn title_row(ui: &mut Ui, contents: impl FnOnce(&mut Ui)) {
+    let size = vec2(ui.available_width(), 24.);
+    ui.allocate_ui_with_layout(size, Layout::left_to_right(Align::Center), contents);
+}
+
+/// The heading line of a card section, as tall as its small buttons.
+pub(super) fn section_row(ui: &mut Ui, contents: impl FnOnce(&mut Ui)) {
+    let size = vec2(ui.available_width(), SMALL_BUTTON);
+    ui.allocate_ui_with_layout(size, Layout::left_to_right(Align::Center), contents);
+}
+
 /// A highlighted line that needs the reader's attention.
 pub(super) fn notice(ui: &mut Ui, text: &str) {
     Frame::new()
@@ -215,6 +244,9 @@ pub(super) fn notice(ui: &mut Ui, text: &str) {
         });
 }
 
+/// A view's title row. Its fixed height matches `button`, so headings,
+/// labels and buttons share one centre line instead of stepping down by
+/// widget height.
 pub(super) fn header_row(ui: &mut Ui, contents: impl FnOnce(&mut Ui)) {
     let size = vec2(ui.available_width(), 36.);
     ui.allocate_ui_with_layout(size, Layout::left_to_right(Align::Center), contents);
