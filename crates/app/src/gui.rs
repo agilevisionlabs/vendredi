@@ -1,4 +1,5 @@
 mod cases;
+mod explain;
 mod form;
 mod history;
 mod inspector;
@@ -87,17 +88,43 @@ impl Session {
             Ok(app) => app.show(ctx),
             Err(e) => {
                 let mut retry = false;
+                let explained = explain::explain(e);
                 egui::CentralPanel::default()
-                    .frame(egui::Frame::new().fill(BG).inner_margin(24))
+                    .frame(egui::Frame::new().fill(BG).inner_margin(GAP_XL as i8 * 2))
                     .show(ctx, |ui| {
-                        ui.heading("Couldn’t open workspace");
-                        ui.label(self.root.display().to_string());
-                        egui::ScrollArea::vertical()
-                            .max_height(ui.available_height() - 52.)
+                        ui.set_max_width(640.);
+                        ui.label(
+                            egui::RichText::new("Couldn’t open the workspace").font(bold(22.)),
+                        );
+                        ui.add_space(GAP_S);
+                        ui.label(egui::RichText::new(&explained.text).size(15.));
+                        ui.add_space(GAP_XS);
+                        ui.label(muted(self.root.display().to_string()).monospace());
+                        ui.add_space(GAP_L);
+                        ui.horizontal(|ui| {
+                            retry = button(ui, "Try again", true).clicked();
+                            if button(ui, "Show in Finder", false).clicked() {
+                                shortcuts::open_externally(
+                                    &self.root.join("vendredi.toml").display().to_string(),
+                                    true,
+                                );
+                            }
+                            if button(ui, "Open the guide", false).clicked() {
+                                shortcuts::open_externally(shortcuts::GUIDE, false);
+                            }
+                        });
+                        ui.add_space(GAP_L);
+                        egui::CollapsingHeader::new("Details")
+                            .id_salt("open error details")
                             .show(ui, |ui| {
-                                ui.label(format!("{e:#}"));
+                                egui::ScrollArea::vertical()
+                                    .max_height(240.)
+                                    .show(ui, |ui| {
+                                        ui.label(
+                                            egui::RichText::new(&explained.details).monospace(),
+                                        );
+                                    });
                             });
-                        retry = button(ui, "Retry", true).clicked();
                     });
                 if retry {
                     self.desktop = Desktop::open(self.root.clone(), ctx);
@@ -256,10 +283,11 @@ impl Desktop {
             match runtime::start(workspace.clone(), output.clone(), true, true) {
                 Ok(r) => (r, true, String::new()),
                 Err(e) => (
+                    // The status below is reported as an error toast.
                     runtime::start(workspace.clone(), output.clone(), true, false)
                         .with_context(|| format!("Opening workspace: {e:#}"))?,
                     false,
-                    format!("Could not start listening: {e:#}"),
+                    format!("Could not start listening. {}", explain::explain(&e).text),
                 ),
             };
         let edit_file = PathBuf::from("vendredi.toml");
@@ -304,7 +332,7 @@ impl Desktop {
             case_form: None,
             focus_search: false,
             toasted: String::new(),
-            status_error: false,
+            status_error: !listening,
             pending_undo: None,
             toast_list: Vec::new(),
             toast_count: 0,
@@ -712,10 +740,10 @@ mod tests {
         let ctx = egui::Context::default();
         let mut session = Session::open(dir.path().into(), &ctx);
         assert!(session.desktop.is_err());
-        click_in(&ctx, "Retry", |ctx| session.show(ctx))?;
+        click_in(&ctx, "Try again", |ctx| session.show(ctx))?;
         assert!(session.desktop.is_err());
         fs::write(path, valid)?;
-        click_in(&ctx, "Retry", |ctx| session.show(ctx))?;
+        click_in(&ctx, "Try again", |ctx| session.show(ctx))?;
         assert!(session.desktop?.listening);
         Ok(())
     }
