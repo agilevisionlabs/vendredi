@@ -49,11 +49,17 @@ pub(super) fn explain(error: &anyhow::Error) -> Explained {
 
 /// The first path-like word in an error chain, such as `cases/orders/reply.edi`.
 fn missing_path(details: &str) -> Option<&str> {
+    // Error chains join their parts with ": ". A lone colon may belong to a
+    // Windows drive, as in C:\Users, so only ": " separates parts.
     details
-        .split([':', ' '])
+        .split(": ")
+        .flat_map(|part| part.split(' '))
         .map(|w| w.trim_matches(|c: char| c == '"' || c == '\''))
         .find(|w| {
-            w.contains('/') || w.ends_with(".edi") || w.ends_with(".js") || w.ends_with(".json")
+            w.contains(['/', '\\'])
+                || w.ends_with(".edi")
+                || w.ends_with(".js")
+                || w.ends_with(".json")
         })
 }
 
@@ -81,7 +87,14 @@ mod tests {
             explained.text,
             "/nonexistent/cases/orders/reply.edi is missing. Restore the file, or choose another one."
         );
-        assert!(explained.details.contains("No such file"));
+        // The system's own wording follows in the details.
+        assert!(explained.details.len() > explained.text.len() / 2);
+        assert_eq!(
+            missing_path(
+                r"C:\Users\me\cases\reply.edi: The system cannot find the path specified."
+            ),
+            Some(r"C:\Users\me\cases\reply.edi")
+        );
         let locked = anyhow::anyhow!("workspace is already in use");
         assert!(
             explain(&locked)
