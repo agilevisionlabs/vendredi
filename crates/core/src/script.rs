@@ -231,3 +231,45 @@ mod tests {
         }
     }
 }
+
+/// Where a script error points in the script as written: 1-based line and
+/// column. The sandbox wraps scripts in its own code, so positions are
+/// measured once against a probe and shifted back.
+pub fn error_position(error: &str) -> Option<(usize, usize)> {
+    static OFFSET: std::sync::OnceLock<Option<(usize, usize)>> = std::sync::OnceLock::new();
+    let at = |text: &str| -> Option<(usize, usize)> {
+        let rest = &text[text.rfind("at line ")? + 8..];
+        let (line, rest) = rest.split_once(", col ")?;
+        let col: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        Some((line.trim().parse().ok()?, col.parse().ok()?))
+    };
+    // A probe whose error is at line 1, column 1 of the script.
+    let (lines, cols) = (*OFFSET.get_or_init(|| {
+        let error = validate("#", "probe").err()?.to_string();
+        let (line, col) = at(&error)?;
+        Some((line - 1, col - 1))
+    }))?;
+    let (line, col) = at(error)?;
+    let line = line.checked_sub(lines)?;
+    // Only the first line shares the wrapper's indentation.
+    let col = if line == 1 {
+        col.saturating_sub(cols)
+    } else {
+        col
+    };
+    (line >= 1).then_some((line, col.max(1)))
+}
+
+#[cfg(test)]
+mod position_tests {
+    use super::*;
+
+    #[test]
+    fn syntax_errors_point_into_the_script() {
+        let error = validate("function f(i, api) {\n  let x = ;\n}", "f").unwrap_err();
+        assert_eq!(error_position(&error.to_string()), Some((2, 11)));
+        let error = validate("var = 1;\nfunction f() {}", "f").unwrap_err();
+        assert_eq!(error_position(&error.to_string()).map(|p| p.0), Some(1));
+        assert_eq!(error_position("not a syntax error"), None);
+    }
+}

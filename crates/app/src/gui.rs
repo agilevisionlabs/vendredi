@@ -1,4 +1,5 @@
 mod cases;
+mod code_editor;
 mod explain;
 mod form;
 mod glossary;

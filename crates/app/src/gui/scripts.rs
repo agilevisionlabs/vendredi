@@ -26,6 +26,7 @@ pub(super) struct ScriptForm {
     original: Option<String>,
     pub(super) error: String,
     confirm_detach: bool,
+    check: code_editor::Check,
 }
 
 /// Cases whose files the editors may change: imported cases are replaced by
@@ -54,6 +55,7 @@ impl ScriptForm {
             original: None,
             error: String::new(),
             confirm_detach: false,
+            check: code_editor::Check::default(),
         }
     }
 
@@ -178,13 +180,7 @@ impl ScriptForm {
             field(ui, "Entry function", &mut self.function);
         }
         form::label(ui, "JavaScript");
-        ui.add(
-            egui::TextEdit::multiline(&mut self.source)
-                .code_editor()
-                .margin(egui::Margin::symmetric(10, 8))
-                .desired_rows(10)
-                .desired_width(f32::INFINITY),
-        );
+        code_editor::js_editor(ui, &mut self.source, &self.function, &mut self.check);
         if self.binding.is_some() {
             let case = find(w, &self.case);
             let name = case.map_or(self.case.as_str(), |c| &c.name);
