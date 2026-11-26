@@ -1,6 +1,7 @@
 mod cases;
 mod explain;
 mod form;
+mod glossary;
 mod history;
 mod inspector;
 #[cfg(test)]

@@ -512,6 +512,10 @@ impl Desktop {
                     }
                     ui.painter().galley(pos, galley, TEXT);
                     offset += raw.len();
+                    let res = match glossary::segment(tag) {
+                        Some(meaning) => res.on_hover_text(format!("{tag}: {meaning}")),
+                        None => res,
+                    };
                     if res.clicked() {
                         self.segment = i;
                     }
