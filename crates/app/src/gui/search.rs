@@ -1,9 +1,7 @@
 use super::*;
-use egui::{Color32, TextFormat, text::LayoutJob};
+use egui::{TextFormat, text::LayoutJob};
 use std::ops::Range;
 use vendredi_core::engine::TrafficSearch;
-
-pub(super) const HIGHLIGHT: Color32 = Color32::from_rgb(255, 220, 115);
 
 impl Desktop {
     pub(super) fn edit_search(&mut self, ctx: &egui::Context) {
@@ -84,8 +82,8 @@ pub(super) fn append(
             &text[left..right],
             0.,
             TextFormat {
-                color: TEXT,
-                background: HIGHLIGHT,
+                color: col::text(),
+                background: col::highlight(),
                 ..format.clone()
             },
         );
@@ -120,7 +118,7 @@ mod tests {
         let highlighted: String = job
             .sections
             .iter()
-            .filter(|s| s.format.background != Color32::TRANSPARENT)
+            .filter(|s| s.format.background != egui::Color32::TRANSPARENT)
             .map(|s| &job.text[s.byte_range.clone()])
             .collect();
         assert_eq!(highlighted, "É+'BGMé+'BGM");

@@ -113,9 +113,9 @@ impl Desktop {
                 .show(ctx, |ui| {
                     ui.set_opacity(opacity);
                     let (fill, stroke, color) = if t.error {
-                        (AMBER_BG, AMBER, AMBER)
+                        (col::amber_bg(), col::amber(), col::amber())
                     } else {
-                        (TEXT, TEXT, BG)
+                        (col::text(), col::text(), col::bg())
                     };
                     egui::Frame::new()
                         .fill(fill)

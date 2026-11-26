@@ -180,13 +180,27 @@ impl Desktop {
                         .font(mono_bold(18.)),
                     );
                     if !row.version.is_empty() {
-                        badge(ui, &row.version, SECONDARY_TEXT, SURFACE, true);
+                        badge(
+                            ui,
+                            &row.version,
+                            col::secondary_text(),
+                            col::surface(),
+                            true,
+                        );
                     }
                     badge(
                         ui,
                         &row.status,
-                        if row.attention { AMBER } else { GREEN },
-                        if row.attention { AMBER_BG } else { GREEN_BG },
+                        if row.attention {
+                            col::amber()
+                        } else {
+                            col::green()
+                        },
+                        if row.attention {
+                            col::amber_bg()
+                        } else {
+                            col::green_bg()
+                        },
                         false,
                     );
                 });
@@ -258,12 +272,16 @@ impl Desktop {
                             ui.painter().circle(
                                 c,
                                 3.7,
-                                if last { BLUE } else { BG },
-                                Stroke::new(1.0_f32, if last { BLUE } else { EDGE }),
+                                if last { col::blue() } else { col::bg() },
+                                Stroke::new(1.0_f32, if last { col::blue() } else { col::edge() }),
                             );
                             ui.label(RichText::new(&step.title).font(bold(13.)));
                             if !step.note.is_empty() {
-                                ui.label(RichText::new(&step.note).size(12.).color(SECONDARY_TEXT));
+                                ui.label(
+                                    RichText::new(&step.note)
+                                        .size(12.)
+                                        .color(col::secondary_text()),
+                                );
                             }
                             if let Some(link) = &step.link {
                                 let label = match link {
@@ -277,7 +295,7 @@ impl Desktop {
                                         RichText::new(label)
                                             .monospace()
                                             .size(12.)
-                                            .color(BLUE)
+                                            .color(col::blue())
                                             .underline(),
                                     )
                                     .clicked()
@@ -309,7 +327,7 @@ impl Desktop {
                 });
         }
         let tabs = Rect::from_min_size(timeline.left_bottom(), vec2(r.width(), 40.));
-        ui.painter().rect_filled(tabs, 0, PANEL);
+        ui.painter().rect_filled(tabs, 0, col::panel());
         line(ui, tabs.left_top(), tabs.right_top());
         line(ui, tabs.left_bottom(), tabs.right_bottom());
         let mut bar = area(ui, tabs.shrink2(vec2(10., 0.)), "detail-tabs");
@@ -331,9 +349,9 @@ impl Desktop {
                 let response = ui.add_sized(
                     [width, 36.],
                     Button::new(RichText::new(label).size(12.).color(if active {
-                        TEXT
+                        col::text()
                     } else {
-                        MUTED
+                        col::muted()
                     }))
                     .frame(false),
                 );
@@ -392,7 +410,7 @@ impl Desktop {
                             ui.label(muted("No findings."));
                         }
                         for f in findings {
-                            ui.colored_label(AMBER, text(f, "code"));
+                            ui.colored_label(col::amber(), text(f, "code"));
                             ui.label(format!("Byte {} · {}", f["offset"], text(f, "text")));
                         }
                     }
@@ -436,7 +454,7 @@ impl Desktop {
             self.reveal_match = false;
         }
         let mut offset = 0;
-        ui.painter().rect_filled(code, 0, CODE);
+        ui.painter().rect_filled(code, 0, col::code());
         let mut body = area(ui, code, "message-lines");
         body.spacing_mut().item_spacing = Vec2::ZERO;
         ScrollArea::both()
@@ -454,14 +472,21 @@ impl Desktop {
                     let (row, res) = ui.allocate_exact_size(vec2(width, 22.), Sense::click());
                     let active = self.segment == i;
                     if active || res.hovered() {
-                        ui.painter()
-                            .rect_filled(row, 0, if active { SELECTED } else { SURFACE });
+                        ui.painter().rect_filled(
+                            row,
+                            0,
+                            if active {
+                                col::selected()
+                            } else {
+                                col::surface()
+                            },
+                        );
                     }
                     if active {
                         ui.painter().rect_filled(
                             Rect::from_min_size(row.min, vec2(2., 22.)),
                             0,
-                            BLUE,
+                            col::blue(),
                         );
                     }
                     ui.painter().text(
@@ -469,7 +494,7 @@ impl Desktop {
                         Align2::RIGHT_CENTER,
                         (i + 1).to_string(),
                         mono(12.),
-                        MUTED,
+                        col::muted(),
                     );
                     let raw = text(seg, "raw");
                     let tag = text(seg, "tag");
@@ -478,9 +503,9 @@ impl Desktop {
                         - message[offset..].trim_start_matches(['\r', '\n']).len();
                     let mut job = egui::text::LayoutJob::default();
                     let tag_color = if matches!(tag, "UNB" | "UNH" | "UNT" | "UNZ") {
-                        MUTED
+                        col::muted()
                     } else {
-                        BLUE
+                        col::blue()
                     };
                     search::append(
                         &mut job,
@@ -494,7 +519,7 @@ impl Desktop {
                         &raw[tag.len()..],
                         offset + tag.len(),
                         &hits,
-                        TextFormat::simple(mono(12.), TEXT),
+                        TextFormat::simple(mono(12.), col::text()),
                     );
                     let galley = ui.painter().layout_job(job);
                     let pos = Align2::LEFT_CENTER
@@ -510,7 +535,7 @@ impl Desktop {
                             .translate(pos.to_vec2());
                         ui.scroll_to_rect(target.expand(8.), None);
                     }
-                    ui.painter().galley(pos, galley, TEXT);
+                    ui.painter().galley(pos, galley, col::text());
                     offset += raw.len();
                     let res = match glossary::segment(tag) {
                         Some(meaning) => res.on_hover_text(format!("{tag}: {meaning}")),
@@ -525,6 +550,8 @@ impl Desktop {
 }
 use egui::Link as LinkWidget;
 fn line_accent(ui: &Ui, left: f32, right: f32, y: f32) {
-    ui.painter()
-        .line_segment([pos2(left, y), pos2(right, y)], Stroke::new(2.0_f32, BLUE));
+    ui.painter().line_segment(
+        [pos2(left, y), pos2(right, y)],
+        Stroke::new(2.0_f32, col::blue()),
+    );
 }

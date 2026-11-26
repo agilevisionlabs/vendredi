@@ -13,8 +13,8 @@ pub(super) fn modal(
         .backdrop_color(Color32::from_rgba_unmultiplied(17, 32, 52, 82))
         .frame(
             Frame::popup(&ctx.style())
-                .fill(BG)
-                .stroke(Stroke::new(1_f32, LINE))
+                .fill(col::bg())
+                .stroke(Stroke::new(1_f32, col::line()))
                 .corner_radius(12)
                 .inner_margin(Margin::same(22)),
         )
@@ -22,10 +22,10 @@ pub(super) fn modal(
             ui.set_width(width.min(ctx.content_rect().width() - 76.));
             ui.spacing_mut().item_spacing = vec2(10., 8.);
             ui.spacing_mut().interact_size.y = 30.;
-            ui.visuals_mut().extreme_bg_color = BG;
-            ui.visuals_mut().widgets.inactive.bg_stroke.color = EDGE;
-            ui.visuals_mut().widgets.hovered.bg_stroke.color = BLUE;
-            ui.visuals_mut().widgets.active.bg_stroke.color = BLUE;
+            ui.visuals_mut().extreme_bg_color = col::bg();
+            ui.visuals_mut().widgets.inactive.bg_stroke.color = col::edge();
+            ui.visuals_mut().widgets.hovered.bg_stroke.color = col::blue();
+            ui.visuals_mut().widgets.active.bg_stroke.color = col::blue();
             ui.label(RichText::new(title).font(bold(22.)));
             ui.add_space(GAP_XS);
             contents(ui);
@@ -36,7 +36,11 @@ pub(super) fn modal(
 }
 
 pub(super) fn label(ui: &mut Ui, text: &str) -> Response {
-    ui.label(RichText::new(text).font(bold(12.)).color(SECONDARY_TEXT))
+    ui.label(
+        RichText::new(text)
+            .font(bold(12.))
+            .color(col::secondary_text()),
+    )
 }
 
 pub(super) fn input(ui: &mut Ui, caption: &str, value: &mut String, hint: &str) -> Response {
@@ -45,8 +49,8 @@ pub(super) fn input(ui: &mut Ui, caption: &str, value: &mut String, hint: &str) 
         let name = label(ui, caption);
         ui.add(
             TextEdit::singleline(value)
-                .hint_text(RichText::new(hint).color(MUTED))
-                .background_color(BG)
+                .hint_text(RichText::new(hint).color(col::muted()))
+                .background_color(col::bg())
                 .margin(Margin::symmetric(10, 7))
                 .desired_width(f32::INFINITY)
                 .min_size(vec2(0., BUTTON)),
@@ -61,7 +65,7 @@ pub(super) fn field(ui: &mut Ui, caption: &str, value: &mut String) {
 }
 
 pub(super) fn card(ui: &mut Ui, contents: impl FnOnce(&mut Ui)) {
-    card_frame(PANEL, LINE).show(ui, |ui| {
+    card_frame(col::panel(), col::line()).show(ui, |ui| {
         ui.set_min_width(ui.available_width());
         contents(ui);
     });
@@ -102,8 +106,8 @@ pub(super) fn path_input(
             let field = ui
                 .add(
                     TextEdit::singleline(value)
-                        .hint_text(RichText::new(hint).color(MUTED))
-                        .background_color(BG)
+                        .hint_text(RichText::new(hint).color(col::muted()))
+                        .background_color(col::bg())
                         .margin(Margin::symmetric(10, 7))
                         .desired_width(ui.available_width() - button_width - GAP_S)
                         .min_size(vec2(0., BUTTON)),

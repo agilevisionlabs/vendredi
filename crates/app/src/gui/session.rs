@@ -166,6 +166,7 @@ impl Session {
     }
 
     pub(super) fn show(&mut self, ctx: &egui::Context) {
+        sync_theme(ctx);
         #[cfg(target_os = "macos")]
         for action in menu::pending() {
             self.perform(action, ctx);
@@ -203,7 +204,11 @@ impl Session {
         let explained = explain::explain(e);
         let mut action = None;
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(BG).inner_margin(GAP_XL as i8 * 2))
+            .frame(
+                egui::Frame::new()
+                    .fill(col::bg())
+                    .inner_margin(GAP_XL as i8 * 2),
+            )
             .show(ctx, |ui| {
                 ui.set_max_width(640.);
                 ui.label(RichText::new("Couldn’t open the workspace").font(bold(22.)));
@@ -244,7 +249,7 @@ impl Session {
         let mut action = None;
         let mut pick = None;
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(PANEL))
+            .frame(egui::Frame::new().fill(col::panel()))
             .show(ctx, |ui| {
                 let width = 560.;
                 let left = ((ui.available_width() - width) / 2.).max(GAP_XL);
@@ -260,7 +265,7 @@ impl Session {
                                 "Stand in for your trading partners. Receive EDIFACT and X12, answer with acknowledgements and replies, and rehearse every failure before it happens in production.",
                             )
                             .size(14.)
-                            .color(SECONDARY_TEXT),
+                            .color(col::secondary_text()),
                         );
                         ui.add_space(GAP_XL);
                         let demo = demo_root();
@@ -337,15 +342,15 @@ impl Session {
 
 /// A large choice on the welcome screen: a title and a line about it.
 fn choice_card(ui: &mut egui::Ui, glyph: &str, title: &str, text: &str) -> egui::Response {
-    let response = card_frame(BG, LINE)
+    let response = card_frame(col::bg(), col::line())
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal_top(|ui| {
-                ui.label(RichText::new(glyph).size(24.).color(BLUE));
+                ui.label(RichText::new(glyph).size(24.).color(col::blue()));
                 ui.add_space(GAP_S);
                 ui.vertical(|ui| {
-                    ui.label(RichText::new(title).font(bold(15.)).color(TEXT));
-                    ui.label(RichText::new(text).color(SECONDARY_TEXT));
+                    ui.label(RichText::new(title).font(bold(15.)).color(col::text()));
+                    ui.label(RichText::new(text).color(col::secondary_text()));
                 });
             });
         })
@@ -355,7 +360,7 @@ fn choice_card(ui: &mut egui::Ui, glyph: &str, title: &str, text: &str) -> egui:
         ui.painter().rect_stroke(
             response.rect,
             8,
-            egui::Stroke::new(1.5_f32, BLUE),
+            egui::Stroke::new(1.5_f32, col::blue()),
             egui::StrokeKind::Inside,
         );
     }

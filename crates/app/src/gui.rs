@@ -552,7 +552,7 @@ impl Desktop {
             }
         });
         if let Some(e) = &self.file_error {
-            ui.colored_label(AMBER, e);
+            ui.colored_label(col::amber(), e);
         }
         if self.file_unavailable {
             return;
@@ -984,7 +984,7 @@ send = { directory = "freight-out" }
                         };
                         let job = &text.galley.job;
                         job.sections.iter().any(|section| {
-                            section.format.background == search::HIGHLIGHT
+                            section.format.background == col::highlight()
                                 && job.text[section.byte_range.clone()].contains(expected)
                         })
                     })

@@ -217,7 +217,7 @@ impl Desktop {
                     ui.label(muted("Start the listener to send traffic."));
                 }
                 if !self.send_error.is_empty() {
-                    ui.colored_label(AMBER, &self.send_error);
+                    ui.colored_label(col::amber(), &self.send_error);
                 }
                 form::footer(ui, |ui| {
                     let valid = self.listening

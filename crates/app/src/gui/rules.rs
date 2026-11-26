@@ -368,7 +368,7 @@ impl Desktop {
                 .max_height((ctx.content_rect().height() - 220.).max(100.))
                 .show(ui, |ui| f.fields(ui));
             if !f.error.is_empty() {
-                ui.colored_label(AMBER, &f.error);
+                ui.colored_label(col::amber(), &f.error);
             }
             form::footer(ui, |ui| {
                 let save = button(ui, "Save rule", true).clicked();

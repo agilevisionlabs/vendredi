@@ -93,7 +93,7 @@ impl Desktop {
                         });
                 }
                 if !f.error.is_empty() {
-                    ui.colored_label(AMBER, &f.error);
+                    ui.colored_label(col::amber(), &f.error);
                 }
                 form::footer(ui, |ui| {
                     if button(

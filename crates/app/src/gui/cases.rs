@@ -100,13 +100,13 @@ impl Desktop {
                     });
                     if changes.iter().any(|c| matches!(c, Change::Changed(_))) {
                         ui.colored_label(
-                            AMBER,
+                            col::amber(),
                             "Changed cases replace the installed copies, including any local edits.",
                         );
                     }
                 }
                 Some(Err(e)) => {
-                    ui.colored_label(AMBER, e);
+                    ui.colored_label(col::amber(), e);
                 }
                 None => {}
             }
@@ -301,7 +301,7 @@ impl Desktop {
                 .cloned();
             if let Some(c) = selected {
                 ui.vertical(|ui| {
-                    card_frame(PANEL, LINE).show(ui, |ui| {
+                    card_frame(col::panel(), col::line()).show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         self.case_detail(ui, &c, active.as_deref() == Some(c.id.as_str()));
                     });
@@ -329,7 +329,7 @@ impl Desktop {
 
     /// The empty list: what cases are for and the ways to get some.
     fn no_cases(&mut self, ui: &mut Ui) {
-        card_frame(BG, LINE).show(ui, |ui| {
+        card_frame(col::bg(), col::line()).show(ui, |ui| {
             ui.set_width(ui.available_width());
             title_row(ui, |ui| {
                 ui.label(RichText::new("No cases installed").font(bold(13.)));
@@ -366,8 +366,8 @@ impl Desktop {
     fn case_row(&mut self, ui: &mut Ui, c: &Case, active: bool) {
         let selected = self.case == c.id;
         let frame = card_frame(
-            if selected { SURFACE } else { BG },
-            if selected { BLUE } else { LINE },
+            if selected { col::surface() } else { col::bg() },
+            if selected { col::blue() } else { col::line() },
         );
         frame.show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -377,7 +377,7 @@ impl Desktop {
                 }
                 if active {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        badge(ui, "Active", BLUE, SURFACE, false);
+                        badge(ui, "Active", col::blue(), col::surface(), false);
                     });
                 }
             });
@@ -397,7 +397,7 @@ impl Desktop {
     fn activate_button(&mut self, ui: &mut Ui, id: &str, active: bool, compatible: bool) {
         let partner = self.workspace.partners[self.partner].name.clone();
         if active {
-            badge(ui, "Active", BLUE, SURFACE, false);
+            badge(ui, "Active", col::blue(), col::surface(), false);
             ui.label(muted(format!("Answering {partner}'s traffic")));
         } else if ui
             .add_enabled(
@@ -437,7 +437,13 @@ impl Desktop {
         let name = partner.name.clone();
         title_row(ui, |ui| {
             ui.label(RichText::new(&c.name).font(bold(17.)));
-            badge(ui, c.standard.label(), SECONDARY_TEXT, SURFACE, true);
+            badge(
+                ui,
+                c.standard.label(),
+                col::secondary_text(),
+                col::surface(),
+                true,
+            );
             if let Some(source) = &c.source {
                 ui.label(muted("Imported").size(12.))
                     .on_hover_text(format!("Imported from {source}"));
@@ -611,7 +617,7 @@ impl Desktop {
                     )));
                 }
                 if !error.is_empty() {
-                    ui.colored_label(AMBER, error.as_str());
+                    ui.colored_label(col::amber(), error.as_str());
                 }
                 form::footer(ui, |ui| {
                     if button(ui, "Create case", true).clicked() {

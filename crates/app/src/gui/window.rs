@@ -5,6 +5,7 @@ use eframe::egui::*;
 const ARRIVAL_GLOW: f64 = 1.6;
 impl Desktop {
     pub(super) fn show(&mut self, ctx: &egui::Context) {
+        sync_theme(ctx);
         self.dispatch_search(ctx);
         self.drain();
         self.shortcuts(ctx);
@@ -16,7 +17,7 @@ impl Desktop {
             .exact_height(30.)
             .frame(
                 Frame::new()
-                    .fill(PANEL)
+                    .fill(col::panel())
                     .inner_margin(Margin::symmetric(16, 5)),
             )
             .show(ctx, |ui| {
@@ -55,7 +56,7 @@ impl Desktop {
             .resizable(false)
             .frame(
                 Frame::new()
-                    .fill(PANEL)
+                    .fill(col::panel())
                     .inner_margin(Margin::symmetric(8, 14)),
             )
             .show(ctx, |ui| {
@@ -140,7 +141,7 @@ impl Desktop {
                 });
             });
         CentralPanel::default()
-            .frame(Frame::new().fill(BG))
+            .frame(Frame::new().fill(col::bg()))
             .show(ctx, |ui| {
                 if self.view == View::Settings {
                     Frame::new()
@@ -213,9 +214,9 @@ impl Desktop {
                         Rect::from_min_max(pos2(r.left(), mid + 1.), r.max),
                     )
                 };
-                ui.painter().rect_filled(r, 0, LINE);
+                ui.painter().rect_filled(r, 0, col::line());
                 for rect in [list, inspect] {
-                    ui.painter().rect_filled(rect, 0, BG);
+                    ui.painter().rect_filled(rect, 0, col::bg());
                 }
                 self.table(&mut area(ui, list, "list"), false);
                 self.reconcile_selection();
@@ -236,15 +237,17 @@ impl Desktop {
             // with the magnifier painted inside its left margin.
             let field = ui.scope(|ui| {
                 let v = ui.visuals_mut();
-                v.extreme_bg_color = PANEL;
-                v.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, EDGE);
+                v.extreme_bg_color = col::panel();
+                v.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, col::edge());
                 v.widgets.inactive.corner_radius = 6.into();
                 v.widgets.hovered.corner_radius = 6.into();
                 v.widgets.active.corner_radius = 6.into();
                 ui.add(
                     TextEdit::singleline(&mut self.search)
                         .id(Id::new(shortcuts::SEARCH_ID))
-                        .hint_text(RichText::new("Search traffic and message text").color(MUTED))
+                        .hint_text(
+                            RichText::new("Search traffic and message text").color(col::muted()),
+                        )
                         .margin(Margin {
                             left: 30,
                             right: 8,
@@ -261,7 +264,7 @@ impl Desktop {
                 Align2::CENTER_CENTER,
                 icon::MAGNIFYING_GLASS,
                 font(15.),
-                MUTED,
+                col::muted(),
             );
             let tip = shortcuts::hint(ui.ctx(), "Search traffic", &shortcuts::SEARCH);
             let field = field.inner.on_hover_text(tip);
@@ -301,7 +304,7 @@ impl Desktop {
                 let w = ui.available_width().max(600.);
                 let cols = [0., 0.132, 0.233, 0.41, 0.547, 0.706, 1.];
                 let (head, _) = ui.allocate_exact_size(vec2(w, 36.), Sense::hover());
-                ui.painter().rect_filled(head, 0, PANEL);
+                ui.painter().rect_filled(head, 0, col::panel());
                 for (i, name) in ["TIME", "DIR", "PARTNER", "MESSAGE", "REFERENCE", "STATUS"]
                     .iter()
                     .enumerate()
@@ -311,7 +314,7 @@ impl Desktop {
                         Align2::LEFT_CENTER,
                         name,
                         font(11.),
-                        MUTED,
+                        col::muted(),
                     );
                 }
                 let rows: Vec<_> = self
@@ -334,7 +337,7 @@ impl Desktop {
                     let selected = self.selected == Some(t.id);
                     if selected || response.hovered() {
                         ui.painter()
-                            .rect_filled(row, 0, if selected { SELECTED } else { PANEL });
+                            .rect_filled(row, 0, if selected { col::selected() } else { col::panel() });
                     } else {
                         // A new transfer glows for a moment as it arrives.
                         let age = now - self.arrivals[&t.id];
@@ -344,7 +347,7 @@ impl Desktop {
                             ui.painter().rect_filled(
                                 row,
                                 0,
-                                SELECTED.gamma_multiply(strength.powi(2)),
+                                col::selected().gamma_multiply(strength.powi(2)),
                             );
                         }
                     }
@@ -352,7 +355,7 @@ impl Desktop {
                         ui.painter().rect_filled(
                             Rect::from_min_size(row.min, vec2(2., row.height())),
                             0,
-                            BLUE,
+                            col::blue(),
                         );
                     }
                     line(ui, row.left_bottom(), row.right_bottom());
@@ -390,7 +393,7 @@ impl Desktop {
                             color,
                         );
                     };
-                    cell(0, &time(t.time), mono(12.), MUTED);
+                    cell(0, &time(t.time), mono(12.), col::muted());
                     let chip = Rect::from_center_size(
                         row.left_center() + vec2(cols[1] * w + 30., 0.),
                         vec2(37., 18.),
@@ -398,8 +401,8 @@ impl Desktop {
                     ui.painter().rect(
                         chip,
                         4,
-                        if t.outgoing { BG } else { TEXT },
-                        Stroke::new(1.0_f32, if t.outgoing { EDGE } else { TEXT }),
+                        if t.outgoing { col::bg() } else { col::text() },
+                        Stroke::new(1.0_f32, if t.outgoing { col::edge() } else { col::text() }),
                         StrokeKind::Inside,
                     );
                     paint(
@@ -408,16 +411,16 @@ impl Desktop {
                         Align2::CENTER_CENTER,
                         t.direction_label(),
                         font(11.),
-                        if t.outgoing { SECONDARY_TEXT } else { BG },
+                        if t.outgoing { col::secondary_text() } else { col::bg() },
                     );
-                    cell(2, &t.partner, font(13.), TEXT);
-                    cell(3, &t.kind, mono_bold(12.), TEXT);
-                    cell(4, &t.reference, mono(12.), MUTED);
+                    cell(2, &t.partner, font(13.), col::text());
+                    cell(3, &t.kind, mono_bold(12.), col::text());
+                    cell(4, &t.reference, mono(12.), col::muted());
                     cell(
                         5,
                         &t.status_label(),
                         font(13.),
-                        if t.attention { AMBER } else { TEXT },
+                        if t.attention { col::amber() } else { col::text() },
                     );
                     response.widget_info(|| {
                         WidgetInfo::selected(
@@ -536,7 +539,7 @@ impl Desktop {
                 .count();
             let (dot, label, detail) = if self.listening {
                 (
-                    GREEN,
+                    col::green(),
                     "Working",
                     format!(
                         "Receiving: HTTP on :{} · {folders} folder{} watched",
@@ -546,7 +549,7 @@ impl Desktop {
                 )
             } else {
                 (
-                    MUTED,
+                    col::muted(),
                     "Paused",
                     "Not receiving: HTTP and folders are off until you resume".to_owned(),
                 )
@@ -563,7 +566,7 @@ impl Desktop {
                 ui.ctx().request_repaint();
             }
             Frame::new()
-                .fill(SURFACE)
+                .fill(col::surface())
                 .corner_radius(10)
                 .inner_margin(Margin::symmetric(8, 2))
                 .show(ui, |ui| {
@@ -577,7 +580,7 @@ impl Desktop {
                             Stroke::new(1.5_f32, dot.gamma_multiply(1. - pulse)),
                         );
                     }
-                    ui.label(RichText::new(label).size(11.).color(SECONDARY_TEXT));
+                    ui.label(RichText::new(label).size(11.).color(col::secondary_text()));
                 })
                 .response
                 .on_hover_text(detail);
@@ -635,26 +638,27 @@ impl Desktop {
         if hovering {
             let screen = ctx.content_rect();
             let painter = ctx.layer_painter(LayerId::new(Order::Foreground, Id::new("drop")));
-            painter.rect_filled(
-                screen,
-                0,
-                Color32::from_rgba_unmultiplied(247, 249, 252, 230),
-            );
+            painter.rect_filled(screen, 0, col::panel().gamma_multiply(0.92));
             let target = screen.shrink(GAP_XL);
-            painter.rect_stroke(target, 12, Stroke::new(2.0_f32, BLUE), StrokeKind::Inside);
+            painter.rect_stroke(
+                target,
+                12,
+                Stroke::new(2.0_f32, col::blue()),
+                StrokeKind::Inside,
+            );
             painter.text(
                 target.center() - vec2(0., 12.),
                 Align2::CENTER_CENTER,
                 "Drop to send or import",
                 bold(20.),
-                TEXT,
+                col::text(),
             );
             painter.text(
                 target.center() + vec2(0., 16.),
                 Align2::CENTER_CENTER,
                 "An EDI document or script is sent to a partner. A case file or folder is imported.",
                 font(13.),
-                MUTED,
+                col::muted(),
             );
         }
         let Some(path) = dropped else {

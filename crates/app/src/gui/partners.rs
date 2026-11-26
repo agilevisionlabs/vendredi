@@ -241,9 +241,13 @@ impl PartnerForm {
         header.append(
             &format!("{} settings", p.standard.label()),
             0.,
-            egui::TextFormat::simple(font(13.), TEXT),
+            egui::TextFormat::simple(font(13.), col::text()),
         );
-        header.append(&summary, 12., egui::TextFormat::simple(font(12.), MUTED));
+        header.append(
+            &summary,
+            12.,
+            egui::TextFormat::simple(font(12.), col::muted()),
+        );
         let options = egui::CollapsingHeader::new(header).id_salt("partner EDI settings");
         options.show(ui, |ui| {
             form::label(ui, "Send acknowledgements");
@@ -305,7 +309,7 @@ impl PartnerForm {
         ui.horizontal(|ui| {
             ui.label(RichText::new("Intake channels").font(bold(15.)));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.menu_button(RichText::new("+ Add channel").color(BLUE), |ui| {
+                ui.menu_button(RichText::new("+ Add channel").color(col::blue()), |ui| {
                     if ui.button("Folder").clicked() {
                         add = Some(Receive::Folder {
                             directory: PathBuf::new(),
@@ -597,7 +601,7 @@ impl Desktop {
                 // Where the guided setup is: "2 of 3 · How it connects".
                 ui.label(
                     RichText::new(format!("{} of {} · {}", step + 1, STEPS.len(), STEPS[step]))
-                        .color(BLUE)
+                        .color(col::blue())
                         .font(bold(12.)),
                 );
                 ui.add_space(GAP_XS);
@@ -611,7 +615,7 @@ impl Desktop {
                     Some(_) => form.behaves(ui, &self.workspace),
                 });
             if !form.error.is_empty() {
-                ui.colored_label(AMBER, &form.error);
+                ui.colored_label(col::amber(), &form.error);
             }
             form::footer(ui, |ui| {
                 let last = form.step.is_none_or(|s| s + 1 == STEPS.len());

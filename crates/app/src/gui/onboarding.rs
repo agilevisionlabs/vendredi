@@ -125,12 +125,16 @@ impl Desktop {
         let mut act = None;
         let mut hide = false;
         egui::Frame::new()
-            .fill(SELECTED)
+            .fill(col::selected())
             .inner_margin(egui::Margin::symmetric(PAGE_MARGIN, 6))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 section_row(ui, |ui| {
-                    ui.label(RichText::new("Getting started").font(bold(12.)).color(BLUE));
+                    ui.label(
+                        RichText::new("Getting started")
+                            .font(bold(12.))
+                            .color(col::blue()),
+                    );
                     ui.add_space(GAP_S);
                     // A narrow window shows only the next step.
                     let narrow = ui.available_width() < 760.;
@@ -141,7 +145,7 @@ impl Desktop {
                         ui.label(
                             RichText::new(format!("{} of {} · {label}", i + 1, steps.len()))
                                 .size(12.)
-                                .color(SECONDARY_TEXT),
+                                .color(col::secondary_text()),
                         );
                         if small_button(ui, "Go").clicked() {
                             act = Some(*step);
@@ -153,7 +157,11 @@ impl Desktop {
                         } else {
                             icon::CIRCLE
                         };
-                        let color = if *done { GREEN } else { SECONDARY_TEXT };
+                        let color = if *done {
+                            col::green()
+                        } else {
+                            col::secondary_text()
+                        };
                         ui.label(
                             RichText::new(format!("{mark} {label}"))
                                 .size(12.)
